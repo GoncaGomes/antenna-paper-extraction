@@ -1,0 +1,7 @@
+[project]
+name = "antenna-paper-extraction"
+version = "0.1.0"
+description = "Evidence-grounded extraction of antenna architecture and reported results from scientific papers."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
