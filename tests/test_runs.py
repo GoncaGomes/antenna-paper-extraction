@@ -6,7 +6,6 @@ import pytest
 from antenna_paper_extraction import runs
 from antenna_paper_extraction.persistence import read_json
 
-
 PDF_CONTENT = b"%PDF-1.4\nminimal test content\n%%EOF\n"
 
 
