@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -47,27 +48,22 @@ def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
     run_id = _generate_run_id(created_at)
 
     run_dir = runs_root / run_id
-    temporary_run_dir = runs_root / f".{run_id}.tmp"
-
-    input_relative_path = Path("input") / input_pdf.name
-    source_pdf = temporary_run_dir / input_relative_path
-    manifest_path = temporary_run_dir / "manifest.json"
 
     runs_root.mkdir(parents=True, exist_ok=True)
 
     if run_dir.exists():
         raise FileExistsError(f"run directory already exists: {run_dir} ")
 
-    if temporary_run_dir.exists():
-        raise FileExistsError(
-            f"temporary run directory already exists:   {temporary_run_dir}"
-        )
-
-    temporary_run_dir.mkdir()
+    temp_dir_str = tempfile.mkdtemp(prefix=f"{run_id}_")
+    temporary_run_dir = Path(temp_dir_str)
 
     try:
         input_directory = temporary_run_dir / "input"
         input_directory.mkdir()
+
+        input_relative_path = Path("input") / input_pdf.name
+        source_pdf = temporary_run_dir / input_relative_path
+        manifest_path = temporary_run_dir / "manifest.json"
 
         shutil.copy2(input_pdf, source_pdf)
         input_sha256 = sha256_file(source_pdf)
@@ -85,7 +81,10 @@ def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
         )
 
         write_json(manifest_path, manifest.model_dump(mode="json"))
-        temporary_run_dir.rename(run_dir)
+
+        runs_root.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(temporary_run_dir), str(run_dir))
+
     except Exception:
         shutil.rmtree(temporary_run_dir, ignore_errors=True)
         raise
