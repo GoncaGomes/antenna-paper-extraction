@@ -53,6 +53,54 @@ class PhaseStatus(BaseModel):
     finished_at: datetime | None = None
     error: PhaseFailure | None = None
 
+    @model_validator(mode="after")
+    def validate_state_consistency(self) -> Self:
+        if self.state == "pending":
+            if (
+                self.started_at is not None
+                or self.finished_at is not None
+                or self.error is not None
+            ):
+                raise ValueError(
+                    "State 'pending' requires all other fields to be None."
+                )
+
+        elif self.state == "running" and (
+            self.started_at is None
+            or self.finished_at is not None
+            or self.error is not None
+        ):
+            raise ValueError("State 'running' requires only 'started_at' to be set.")
+
+        elif self.state == "succeeded" and (
+            self.started_at is None
+            or self.finished_at is None
+            or self.error is not None
+        ):
+            raise ValueError(
+                "State 'succeeded' requires 'started_at' and 'finished_at' to be set, and 'error' to be None."
+            )
+
+        elif self.state == "failed" and (
+            self.started_at is None or self.finished_at is None or self.error is None
+        ):
+            raise ValueError("State 'failed' requires all fields to be set.")
+
+        if self.started_at is not None and self.started_at.utcoffset() is None:
+            raise ValueError("started_at must be timezone-aware")
+
+        if self.finished_at is not None and self.finished_at.utcoffset() is None:
+            raise ValueError("finished_at must be timezone-aware")
+
+        if (
+            self.started_at is not None
+            and self.finished_at is not None
+            and self.finished_at < self.started_at
+        ):
+            raise ValueError("finished_at must not be earlier than started_at")
+
+        return self
+
 
 class RunPhases(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -154,48 +202,3 @@ def sha256_file(path: Path) -> str:
 def generate_run_id(created_at: datetime) -> str:
     timestamp = created_at.strftime("%Y%m%dT%H%M%S%z")
     return f"run_{timestamp}_{uuid4().hex[:8]}"
-
-
-@model_validator(mode="after")
-def validate_state_consistency(self) -> Self:
-    if self.state == "pending":
-        if (
-            self.started_at is not None
-            or self.finished_at is not None
-            or self.error is not None
-        ):
-            raise ValueError("State 'pending' requires all other fields to be None.")
-
-    elif self.state == "running" and (
-        self.started_at is None
-        or self.finished_at is not None
-        or self.error is not None
-    ):
-        raise ValueError("State 'running' requires only 'started_at' to be set.")
-
-    elif self.state == "succeeded" and (
-        self.started_at is None or self.finished_at is None or self.error is not None
-    ):
-        raise ValueError(
-            "State 'succeeded' requires 'started_at' and 'finished_at' to be set, and 'error' to be None."
-        )
-
-    elif self.state == "failed" and (
-        self.started_at is None or self.finished_at is None or self.error is None
-    ):
-        raise ValueError("State 'failed' requires all fields to be set.")
-
-    if self.started_at is not None and self.started_at.utcoffset() is None:
-        raise ValueError("started_at must be timezone-aware")
-
-    if self.finished_at is not None and self.finished_at.utcoffset() is None:
-        raise ValueError("finished_at must be timezone-aware")
-
-    if (
-        self.started_at is not None
-        and self.finished_at is not None
-        and self.started_at > self.finished_at
-    ):
-        raise ValueError("started_at must be before finished_at")
-
-    return self

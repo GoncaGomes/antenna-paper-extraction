@@ -4,6 +4,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import ValidationError
 
 from antenna_paper_extraction import runs
 from antenna_paper_extraction.persistence import read_json
@@ -195,3 +196,20 @@ def test_run_status_represents_current_run_phases() -> None:
     assert status.run_id == run_id
     assert status.phases.source_preservation.state == "succeeded"
     assert status.phases.page_rendering.state == "pending"
+
+
+def test_phase_status_rejects_pending_with_timestamp() -> None:
+    started_at = datetime(
+        2026,
+        8,
+        26,
+        16,
+        0,
+        tzinfo=ZoneInfo("Europe/Lisbon"),
+    )
+
+    with pytest.raises(ValidationError, match="pending"):
+        PhaseStatus(
+            state="pending",
+            started_at=started_at,
+        )
