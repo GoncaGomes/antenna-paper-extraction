@@ -7,7 +7,7 @@ from typing import Literal
 import pypdfium2 as pdfium
 from pydantic import BaseModel, ConfigDict, Field
 
-from antenna_paper_extraction.persistence import write_json
+from antenna_paper_extraction.persistence import write_json, read_json
 from antenna_paper_extraction.runs import sha256_file
 
 
@@ -51,7 +51,10 @@ def render_pdf_pages(
     *,
     dpi: int = 200,
 ) -> PagesManifest:
-    source_pdf = run_dir / "input" / "source.pdf"
+
+    run_maifest = read_json(run_dir / "manifest.json")
+    source_relative_path = run_maifest["source_pdf"]["relative_path"]
+    source_pdf = run_dir / source_relative_path
     output_dir = run_dir / "pages"
     manifest_path = run_dir / "pages.json"
 
