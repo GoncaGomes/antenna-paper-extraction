@@ -52,8 +52,8 @@ def render_pdf_pages(
     dpi: int = 200,
 ) -> PagesManifest:
 
-    run_maifest = read_json(run_dir / "manifest.json")
-    source_relative_path = run_maifest["source_pdf"]["relative_path"]
+    run_manifest = read_json(run_dir / "manifest.json")
+    source_relative_path = run_manifest["source_pdf"]["relative_path"]
     source_pdf = run_dir / source_relative_path
     output_dir = run_dir / "pages"
     manifest_path = run_dir / "pages.json"

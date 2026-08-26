@@ -1,10 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from antenna_paper_extraction import runs
 from antenna_paper_extraction.persistence import read_json
+from antenna_paper_extraction.runs import (
+    PhaseStatus,
+    RunPhases,
+    RunStatus,
+)
 
 PDF_CONTENT = b"%PDF-1.4\nminimal test content\n%%EOF\n"
 
@@ -132,3 +138,36 @@ def test_create_run_removes_temporary_directory_after_failure(
 
     assert runs_root.exists()
     assert list(runs_root.iterdir()) == []
+
+
+def test_run_status_represents_current_run_phases() -> None:
+    started_at = datetime(
+        2026,
+        8,
+        26,
+        16,
+        0,
+        tzinfo=ZoneInfo("Europe/Lisbon"),
+    )
+    finished_at = started_at + timedelta(seconds=1)
+
+    run_id = "run_20260826T130522+0100_1eab0e6e"
+    source_preservation = PhaseStatus(
+        state="succeeded",
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+    page_rendering = PhaseStatus(state="pending")
+    phases = RunPhases(
+        source_preservation=source_preservation,
+        page_rendering=page_rendering,
+    )
+    status = RunStatus(
+        run_id=run_id,
+        phases=phases,
+    )
+    assert status.schema_version == "1.0"
+    assert status.run_id == run_id
+    assert status.phases.source_preservation.state == "succeeded"
+    assert status.phases.page_rendering.state == "pending"
