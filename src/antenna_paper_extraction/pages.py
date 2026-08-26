@@ -7,7 +7,7 @@ from typing import Literal
 import pypdfium2 as pdfium
 from pydantic import BaseModel, ConfigDict, Field
 
-from antenna_paper_extraction.persistence import write_json, read_json
+from antenna_paper_extraction.persistence import read_json, write_json
 from antenna_paper_extraction.runs import sha256_file
 
 

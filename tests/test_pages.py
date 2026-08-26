@@ -28,12 +28,11 @@ def write_encrypted_pdf(path: Path, password: str) -> None:
 
 
 def test_render_pdf_pages_renders_one_page(tmp_path: Path) -> None:
-    input_pdf = tmp_path / "source.pdf"
+    input_pdf = tmp_path / "paper with spaces.pdf"
     write_pdf(input_pdf, [(72, 72)])
     run_dir = create_run(input_pdf, tmp_path / "runs")
 
     manifest = render_pdf_pages(run_dir)
-
     page = manifest.pages[0]
     assert manifest.page_count == 1
     assert page.page_number == 1
