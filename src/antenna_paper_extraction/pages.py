@@ -7,7 +7,7 @@ from typing import Literal
 import pypdfium2 as pdfium
 from pydantic import BaseModel, ConfigDict, Field
 
-from antenna_paper_extraction.persistence import read_json, write_json
+from antenna_paper_extraction.persistence import read_json, write_bytes, write_json
 from antenna_paper_extraction.runs import sha256_file
 
 
@@ -95,7 +95,7 @@ def render_pdf_pages(
             finally:
                 page.close()
 
-            output_file.write_bytes(image_bytes)
+            write_bytes(output_file, image_bytes)
 
             page_assets.append(
                 PageAsset(
