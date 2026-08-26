@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -54,6 +55,29 @@ def test_create_run_copies_pdf_and_writes_manifest(tmp_path: Path) -> None:
     assert source_pdf["relative_path"] == f"input/{input_pdf.name}"
     assert source_pdf["sha256"] == checksum
     assert source_pdf["size_bytes"] == copied_pdf.stat().st_size
+    assert {path.name for path in run_dir.iterdir()} == {
+        "input",
+        "manifest.json",
+        "status.json",
+    }
+
+    status_path = run_dir / "status.json"
+    assert status_path.is_file()
+    status_data = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status_data["schema_version"] == "1.0"
+    assert status_data["run_id"] == manifest["run_id"]
+
+    assert status_data["phases"]["source_preservation"]["state"] == "succeeded"
+    assert status_data["phases"]["source_preservation"]["started_at"] is not None
+    assert status_data["phases"]["source_preservation"]["finished_at"] is not None
+    assert status_data["phases"]["source_preservation"]["error"] is None
+
+    assert status_data["phases"]["page_rendering"] == {
+        "state": "pending",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+    }
 
 
 def test_same_content_has_same_document_identity(tmp_path: Path) -> None:
@@ -110,7 +134,7 @@ def test_create_run_does_not_overwrite_existing_run(
 
     monkeypatch.setattr(
         runs,
-        "_generate_run_id",
+        "generate_run_id",
         lambda *_args, **_kwargs: existing_run.name,
     )
 

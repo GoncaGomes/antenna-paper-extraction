@@ -70,7 +70,6 @@ class RunStatus(BaseModel):
 
 
 def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
-
     input_pdf = Path(input_pdf)
     runs_root = Path(runs_root)
 
@@ -80,7 +79,7 @@ def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
         raise ValueError(f"input PDF is not a file: {input_pdf}")
 
     created_at = datetime.now(PORTUGAL_TIMEZONE)
-    run_id = _generate_run_id(created_at)
+    run_id = generate_run_id(created_at)
 
     run_dir = runs_root / run_id
 
@@ -99,9 +98,15 @@ def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
         input_relative_path = Path("input") / input_pdf.name
         source_pdf = temporary_run_dir / input_relative_path
         manifest_path = temporary_run_dir / "manifest.json"
+        status_path = temporary_run_dir / "status.json"
+
+        source_started_at = datetime.now(PORTUGAL_TIMEZONE)
 
         shutil.copy2(input_pdf, source_pdf)
         input_sha256 = sha256_file(source_pdf)
+        input_size_bytes = source_pdf.stat().st_size
+
+        source_finished_at = datetime.now(PORTUGAL_TIMEZONE)
 
         manifest = RunManifest(
             run_id=run_id,
@@ -111,13 +116,24 @@ def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
                 original_filename=input_pdf.name,
                 relative_path=input_relative_path.as_posix(),
                 sha256=input_sha256,
-                size_bytes=source_pdf.stat().st_size,
+                size_bytes=input_size_bytes,
             ),
         )
 
+        run_status = RunStatus(
+            run_id=run_id,
+            phases=RunPhases(
+                source_preservation=PhaseStatus(
+                    state="succeeded",
+                    started_at=source_started_at,
+                    finished_at=source_finished_at,
+                ),
+                page_rendering=PhaseStatus(state="pending"),
+            ),
+        )
         write_json(manifest_path, manifest.model_dump(mode="json"))
+        write_json(status_path, run_status.model_dump(mode="json"))
 
-        runs_root.mkdir(parents=True, exist_ok=True)
         shutil.move(str(temporary_run_dir), str(run_dir))
 
     except Exception:
@@ -135,7 +151,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _generate_run_id(created_at: datetime) -> str:
+def generate_run_id(created_at: datetime) -> str:
     timestamp = created_at.strftime("%Y%m%dT%H%M%S%z")
     return f"run_{timestamp}_{uuid4().hex[:8]}"
 
