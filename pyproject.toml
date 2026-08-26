@@ -20,6 +20,7 @@ antenna-extract = "antenna_paper_extraction.cli:main"
 
 [dependency-groups]
 dev = [
+    "pypdf>=6.16.2",
     "pytest>=9.1.1",
     "ruff>=0.16.4",
 ]

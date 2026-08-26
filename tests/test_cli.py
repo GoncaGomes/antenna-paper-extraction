@@ -6,7 +6,7 @@ from antenna_paper_extraction import cli
 
 
 def test_init_run_help_uses_public_cli_names(
-        capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exception:
         cli.main(["init-run", "--help"])
@@ -18,10 +18,11 @@ def test_init_run_help_uses_public_cli_names(
     assert "--runs_root" not in captured.out
     assert captured.err == ""
 
+
 def test_init_run_reports_created_directory(
-        tmp_path: Path, 
-        monkeypatch: pytest.MonkeyPatch, 
-        capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     input_pdf = tmp_path / "paper.pdf"
     runs_root = tmp_path / "custom-runs"
@@ -49,6 +50,7 @@ def test_init_run_reports_created_directory(
     assert captured.out == f"Created run: {run_dir.resolve()}\n"
     assert captured.err == ""
 
+
 def test_init_run_reports_expected_failure(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -65,10 +67,10 @@ def test_init_run_reports_expected_failure(
     assert exit_code == 1
     assert captured.out == ""
     assert captured.err == (
-        "Failed to create run. "
-        "input PDF does not exist: missing.pdf\n"
+        "Failed to create run. input PDF does not exist: missing.pdf\n"
     )
     assert "Traceback" not in captured.err
+
 
 def test_init_run_does_not_hide_unexpected_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -80,6 +82,7 @@ def test_init_run_does_not_hide_unexpected_failure(
 
     with pytest.raises(RuntimeError, match="simulated programming error"):
         cli.main(["init-run", "paper.pdf"])
+
 
 def test_missing_input_pdf_uses_argparse_error(
     capsys: pytest.CaptureFixture[str],
