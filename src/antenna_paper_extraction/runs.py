@@ -202,3 +202,95 @@ def sha256_file(path: Path) -> str:
 def generate_run_id(created_at: datetime) -> str:
     timestamp = created_at.strftime("%Y%m%dT%H%M%S%z")
     return f"run_{timestamp}_{uuid4().hex[:8]}"
+
+
+def load_run_status(run_dir: Path) -> RunStatus:
+    status_path = run_dir / "status.json"
+    return RunStatus.model_validate_json(status_path.read_text(encoding="utf-8"))
+
+
+def mark_page_rendering_running(run_dir: Path) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+
+    if current_status.phases.source_preservation.state != "succeeded":
+        raise ValueError(
+            "source_preservation must be succeeded to mark page rendering as running"
+        )
+    current_page_status = current_status.phases.page_rendering
+    if current_page_status.state != "pending":
+        raise ValueError("page rendering can only start from the pending state")
+
+    started_at = datetime.now(PORTUGAL_TIMEZONE)
+
+    updated_status = RunStatus(
+        schema_version=current_status.schema_version,
+        run_id=current_status.run_id,
+        phases=RunPhases(
+            source_preservation=current_status.phases.source_preservation,
+            page_rendering=PhaseStatus(state="running", started_at=started_at),
+        ),
+    )
+    write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
+
+    return updated_status
+
+
+def mark_page_rendering_succeeded(run_dir: Path) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+    current_page_status = current_status.phases.page_rendering
+
+    if current_status.phases.source_preservation.state != "succeeded":
+        raise ValueError(
+            "source_preservation must be succeeded to mark page rendering as succeeded"
+        )
+
+    if current_page_status.state != "running":
+        raise ValueError("page rendering can only succeed from the running state")
+
+    finished_at = datetime.now(PORTUGAL_TIMEZONE)
+
+    updated_status = RunStatus(
+        schema_version=current_status.schema_version,
+        run_id=current_status.run_id,
+        phases=RunPhases(
+            source_preservation=current_status.phases.source_preservation,
+            page_rendering=PhaseStatus(
+                state="succeeded",
+                started_at=current_page_status.started_at,
+                finished_at=finished_at,
+            ),
+        ),
+    )
+    write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
+
+    return updated_status
+
+
+def mark_page_rendering_failed(run_dir: Path, failure: PhaseFailure) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+    current_page_status = current_status.phases.page_rendering
+
+    if current_status.phases.page_rendering.state != "running":
+        raise ValueError("page rendering can only fail from the running state")
+
+    finished_at = datetime.now(PORTUGAL_TIMEZONE)
+
+    updated_status = RunStatus(
+        schema_version=current_status.schema_version,
+        run_id=current_status.run_id,
+        phases=RunPhases(
+            source_preservation=current_status.phases.source_preservation,
+            page_rendering=PhaseStatus(
+                state="failed",
+                started_at=current_page_status.started_at,
+                finished_at=finished_at,
+                error=failure,
+            ),
+        ),
+    )
+    write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
+
+    return updated_status

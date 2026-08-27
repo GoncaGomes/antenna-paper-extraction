@@ -9,17 +9,17 @@ from pydantic import ValidationError
 from antenna_paper_extraction import runs
 from antenna_paper_extraction.persistence import read_json
 from antenna_paper_extraction.runs import (
+    PhaseFailure,
     PhaseStatus,
     RunPhases,
     RunStatus,
+    load_run_status,
+    mark_page_rendering_failed,
+    mark_page_rendering_running,
+    mark_page_rendering_succeeded,
 )
 
 PDF_CONTENT = b"%PDF-1.4\nminimal test content\n%%EOF\n"
-
-
-def write_test_pdf(path: Path, content: bytes = PDF_CONTENT) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
 
 
 def test_create_run_copies_pdf_and_writes_manifest(tmp_path: Path) -> None:
@@ -213,3 +213,158 @@ def test_phase_status_rejects_pending_with_timestamp() -> None:
             state="pending",
             started_at=started_at,
         )
+
+
+def test_load_run_status_validates_persisted_status(tmp_path: Path) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    runs_root = tmp_path / "runs"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, runs_root)
+    status = load_run_status(run_dir)
+
+    assert isinstance(status, RunStatus)
+    assert status.run_id == run_dir.name
+    assert status.phases.source_preservation.state == "succeeded"
+    assert status.phases.page_rendering.state == "pending"
+
+
+def test_mark_page_rendering_running_persists_transition(tmp_path: Path) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, tmp_path / "runs")
+    initial_status = load_run_status(run_dir)
+
+    updated_status = mark_page_rendering_running(run_dir)
+    persisted_status = load_run_status(run_dir)
+
+    assert updated_status == persisted_status
+    assert updated_status.run_id == initial_status.run_id
+    assert (
+        updated_status.phases.source_preservation
+        == initial_status.phases.source_preservation
+    )
+
+    page_status = updated_status.phases.page_rendering
+    assert page_status.state == "running"
+    assert page_status.started_at is not None
+    assert page_status.started_at.utcoffset() is not None
+    assert page_status.finished_at is None
+    assert page_status.error is None
+
+
+def test_mark_page_rendering_running_rejects_repeated_start(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, tmp_path / "runs")
+    mark_page_rendering_running(run_dir)
+
+    with pytest.raises(ValueError, match="only start from the pending state"):
+        mark_page_rendering_running(run_dir)
+
+
+def test_mark_page_rendering_succeeded_persists_transition(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, tmp_path / "runs")
+    running_status = mark_page_rendering_running(run_dir)
+
+    updated_status = mark_page_rendering_succeeded(run_dir)
+    persisted_status = load_run_status(run_dir)
+
+    assert updated_status == persisted_status
+    assert (
+        updated_status.phases.source_preservation
+        == running_status.phases.source_preservation
+    )
+
+    previous_page_status = running_status.phases.page_rendering
+    page_status = updated_status.phases.page_rendering
+
+    assert page_status.state == "succeeded"
+    assert page_status.started_at == previous_page_status.started_at
+    assert page_status.finished_at is not None
+    assert page_status.finished_at.utcoffset() is not None
+    assert page_status.finished_at >= page_status.started_at
+    assert page_status.error is None
+
+
+def test_mark_page_rendering_succeeded_rejects_pending_state(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, tmp_path / "runs")
+
+    with pytest.raises(ValueError, match="only succeed from the running state"):
+        mark_page_rendering_succeeded(run_dir)
+
+
+def test_mark_page_rendering_failed_persists_failure(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, tmp_path / "runs")
+    running_status = mark_page_rendering_running(run_dir)
+
+    failure = PhaseFailure(
+        type="PdfiumError",
+        message="simulated rendering failure",
+    )
+
+    updated_status = mark_page_rendering_failed(run_dir, failure)
+    persisted_status = load_run_status(run_dir)
+
+    assert updated_status == persisted_status
+    assert (
+        updated_status.phases.source_preservation
+        == running_status.phases.source_preservation
+    )
+
+    previous_page_status = running_status.phases.page_rendering
+    page_status = updated_status.phases.page_rendering
+
+    assert page_status.state == "failed"
+    assert page_status.started_at == previous_page_status.started_at
+    assert page_status.finished_at is not None
+    assert page_status.finished_at.utcoffset() is not None
+    assert page_status.finished_at >= page_status.started_at
+    assert page_status.error == failure
+    status_data = read_json(run_dir / "status.json")
+
+    assert status_data["phases"]["page_rendering"]["error"] == {
+        "type": "PdfiumError",
+        "message": "simulated rendering failure",
+    }
+
+
+def test_mark_page_rendering_failed_rejects_pending_state(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(input_pdf)
+
+    run_dir = runs.create_run(input_pdf, tmp_path / "runs")
+
+    failure = PhaseFailure(
+        type="PdfiumError",
+        message="simulated rendering failure",
+    )
+
+    with pytest.raises(ValueError, match="only fail from the running state"):
+        mark_page_rendering_failed(run_dir, failure)
+
+
+def write_test_pdf(path: Path, content: bytes = PDF_CONTENT) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
