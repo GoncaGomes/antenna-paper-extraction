@@ -7,27 +7,28 @@ The project is being developed as a small, sequential pipeline. Its final consum
 - `antenna_architecture.json`
 - `antenna_results.json`
 
-The complete extraction pipeline is not implemented yet. The current code provides the initial run lifecycle: it creates an isolated run, preserves the source PDF, computes its SHA-256 identity, and writes a traceable manifest.
+The complete extraction pipeline is not implemented yet. The current code provides the Phase 1 run lifecycle: it creates an isolated run, preserves and verifies the source PDF, records structured phase status, and renders ordered page assets with traceable metadata.
 
 ## Project status
 
 Development is currently in Phase 1, Run Lifecycle and Source Preservation. The roadmap status metadata still says that implementation has not started and must be aligned with the merged code before the Phase 1 completion gate is assessed.
 
-Available on `main`:
+Currently implemented:
 
 - Python 3.12 project managed with `uv`
 - Isolated run creation for one PDF at a time
-- Source PDF preservation and SHA-256 hashing
+- Source PDF preservation and SHA-256 verification
 - Run manifests validated with Pydantic
-- Portugal-local creation timestamps
-- Atomic JSON persistence
+- Structured lifecycle status and failure records
+- Ordered PDF page rendering with page metadata and checksums
+- Portugal-local lifecycle timestamps
+- Atomic JSON and binary persistence
 - An `antenna-extract init-run` command
+- An `antenna-extract render-pages` command
 - Local tests and Ruff checks
 
 Not yet implemented:
 
-- Ordered PDF page rendering
-- Structured phase status and failure records
 - NuExtract3 document conversion
 - Visual asset inspection
 - Architecture and results agents
@@ -58,6 +59,9 @@ Create the environment and install the project dependencies:
 uv sync
 ```
 
+Verify that the command-line interface is available:
+uv run antenna-extract --help
+
 ## Usage
 
 Create a traceable run from a local PDF:
@@ -66,11 +70,38 @@ Create a traceable run from a local PDF:
 uv run antenna-extract init-run path/to/paper.pdf
 ```
 
-By default, run artefacts are written under `runs/`. This directory is excluded from version control.
+By default, run artefacts are written under `runs/`. The command prints the path of the newly created run.
 
-The command currently initializes the run only. It does not yet render pages or call a model.
+Render every page of an existing run:
+
+```bash
+uv run antenna-extract render-pages runs/run_<id>
+```
+
+Page rendering uses 200 DPI by default. A different resolution can be selected explicitly:
+
+```bash
+uv run antenna-extract render-pages runs/run_<id> --dpi 300
+```
 
 ## Development checks
+
+After successful rendering, the run contains:
+
+```text
+run_<id>/
+├── input/
+│   └── <original-filename>.pdf
+├── pages/
+│   ├── page_0001.png
+│   └── ...
+├── manifest.json
+├── pages.json
+└── status.json
+```
+
+manifest.json records the stable run and document identity. pages.json describes the ordered rendered assets. status.json records lifecycle timestamps and inspectable phase failures.
+The commands currently stop after page rendering. They do not yet perform document conversion or call a model.
 
 Run the test suite:
 
@@ -94,9 +125,3 @@ The project sources of truth are, in order:
 4. Scientific benchmark requirements for acceptance, once introduced
 
 Development rules for coding agents are defined in [`AGENTS.md`](AGENTS.md).
-
-The previous V2 repository remains available as [historical context and a regression baseline](https://github.com/GoncaGomes/antenna_extraction/tree/feat/antenna-pipeline-v2). Its architecture and code are not normative for this repository.
-
-## Scope
-
-The initial baseline processes one scientific paper per run. It does not include CST integration, simulation, optimization, semantic RAG, automatic retries, fallback models, parallel execution, or a general-purpose agent framework.
