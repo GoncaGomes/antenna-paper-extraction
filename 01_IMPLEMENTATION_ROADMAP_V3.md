@@ -1,10 +1,10 @@
 # Antenna Extraction v3 — Implementation Roadmap
 
-**Status:** active execution plan 
-**Version:** 3.0-draft  
-**Date:** 2026-08-24  
-**Architectural authority:** `00_ARCHITECTURE_V3.md`  
-**Current implementation phase:** Phase 1 completion review  
+- **Status:** active execution plan
+- **Version:** 3.0-draft
+- **Date:** 2026-08-24
+- **Architectural authority:** `00_ARCHITECTURE_V3.md`
+- **Current implementation phase:** Phase 1 completion review
 
 ## 1. Purpose
 
@@ -215,10 +215,10 @@ These constraints apply to all phases:
 
 ## 8. Phase 0 — foundation and project rules
 
-**Chat:** `00 - Foundation and project rules`  
-**Branch:** `chore/foundation`  
-**Model calls:** none  
-**Status:** Completed
+- **Chat:** `00 - Foundation and project rules`
+- **Branch:** `chore/foundation`
+- **Model calls:** none
+- **Status:** Completed
 
 ### 8.1 Objective
 
@@ -309,10 +309,10 @@ consumer existed.
 
 ## 9. Phase 1 — run lifecycle and source preservation
 
-**Chat:** `01 — Run lifecycle and source preservation`  
-**Branch:** `feat/run-lifecycle-completion`  
-**Model calls:** none  
-**Status:** implementation complete, awaiting merge
+- **Chat:** `01 — Run lifecycle and source preservation`
+- **Branch:** `feat/run-lifecycle-completion`
+- **Model calls:** none
+- **Status:** implementation complete, awaiting merge
 
 ### 9.1 Objective
 
@@ -432,10 +432,10 @@ a workflow engine.
 
 ## 10. Phase 2 — NuExtract3 DocumentPackage
 
-**Chat:** `02 — NuExtract3 DocumentPackage`  
-**Branch:** `feat/document-package`  
-**Normal model calls:** one  
-**Status:** not started
+- **Chat:** `02 — NuExtract3 DocumentPackage`
+- **Branch:** `feat/document-package`
+- **Normal model calls:** one
+- **Status:** not started
 
 ### 10.1 Objective
 
@@ -604,10 +604,10 @@ a domain schema, and how package immutability protects later evidence.
 
 ## 11. Phase 3 — bounded asset inspection
 
-**Chat:** `03 — Bounded asset inspection`  
-**Branch:** `feat/asset-inspection`  
-**Model calls:** none in deterministic tool tests; up to two in an integration agent run  
-**Status:** not started
+- **Chat:** `03 — Bounded asset inspection`
+- **Branch:** `feat/asset-inspection`
+- **Model calls:** none in deterministic tool tests; up to two in an integration agent run
+- **Status:** not started
 
 ### 11.1 Objective
 
@@ -732,10 +732,10 @@ explain why this is one logical agent run but potentially two model calls.
 
 ## 12. Phase 4 — architecture agent
 
-**Chat:** `04 — Architecture agent`  
-**Branch:** `feat/architecture-agent`  
-**Normal model calls:** one or two  
-**Status:** not started
+- **Chat:** `04 — Architecture agent`
+- **Branch:** `feat/architecture-agent`
+- **Normal model calls:** one or two
+- **Status:** not started
 
 ### 12.1 Objective
 
@@ -868,10 +868,10 @@ grounded report is safer than a complete-looking reconstruction.
 
 ## 13. Phase 5 — results agent
 
-**Chat:** `05 — Results agent`  
-**Branch:** `feat/results-agent`  
-**Normal model calls:** one or two  
-**Status:** not started
+- **Chat:** `05 — Results agent`
+- **Branch:** `feat/results-agent`
+- **Normal model calls:** one or two
+- **Status:** not started
 
 ### 13.1 Objective
 
@@ -1016,10 +1016,10 @@ can be preserved without pretending to have precise numeric samples.
 
 ## 14. Phase 6 — canonicalization and final contracts
 
-**Chat:** `06 — Canonicalization and final contracts`  
-**Branch:** `feat/canonicalization`  
-**Normal model calls:** one  
-**Status:** not started
+- **Chat:** `06 — Canonicalization and final contracts`
+- **Branch:** `feat/canonicalization`
+- **Normal model calls:** one
+- **Status:** not started
 
 ### 14.1 Objective
 
@@ -1184,10 +1184,10 @@ loss, and why deterministic splitting is safe while semantic repair is not.
 
 ## 15. Phase 7 — end-to-end runner
 
-**Chat:** `07 — End-to-end runner`  
-**Branch:** `feat/end-to-end`  
-**Normal model calls:** four to six  
-**Status:** not started
+- **Chat:** `07 — End-to-end runner`
+- **Branch:** `feat/end-to-end`
+- **Normal model calls:** four to six
+- **Status:** not started
 
 ### 15.1 Objective
 
@@ -1302,10 +1302,10 @@ reports survive without turning the runner into a complex workflow engine.
 
 ## 16. Phase 8 — scientific benchmark and baseline
 
-**Chat:** `08 — Scientific benchmark and baseline`  
-**Branch:** `test/scientific-benchmark`  
-**Model calls:** explicit, sequential, and reported per experiment  
-**Status:** not started
+- **Chat:** `08 — Scientific benchmark and baseline`
+- **Branch:** `test/scientific-benchmark`
+- **Model calls:** explicit, sequential, and reported per experiment
+- **Status:** not started
 
 ### 16.1 Objective
 

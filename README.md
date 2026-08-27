@@ -59,8 +59,8 @@ Create the environment and install the project dependencies:
 uv sync
 ```
 
-
 Verify that the command-line interface is available:
+
 ```bash
 uv run antenna-extract --help
 ```
