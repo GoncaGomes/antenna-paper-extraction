@@ -8,32 +8,28 @@ from PIL import Image
 from pypdf import PdfWriter
 
 from antenna_paper_extraction.pages import render_pdf_pages
-from antenna_paper_extraction.runs import create_run
-
-
-def write_pdf(path: Path, page_sizes: list[tuple[int, int]]) -> None:
-    writer = PdfWriter()
-    for width, height in page_sizes:
-        writer.add_blank_page(width=width, height=height)
-    with path.open("wb") as file:
-        writer.write(file)
-
-
-def write_encrypted_pdf(path: Path, password: str) -> None:
-    writer = PdfWriter()
-    writer.add_blank_page(width=72, height=72)
-    writer.encrypt(password)
-    with path.open("wb") as file:
-        writer.write(file)
+from antenna_paper_extraction.runs import (
+    create_run,
+    load_run_status,
+)
 
 
 def test_render_pdf_pages_renders_one_page(tmp_path: Path) -> None:
     input_pdf = tmp_path / "paper with spaces.pdf"
     write_pdf(input_pdf, [(72, 72)])
     run_dir = create_run(input_pdf, tmp_path / "runs")
-
     manifest = render_pdf_pages(run_dir)
+    status = load_run_status(run_dir)
+    page_status = status.phases.page_rendering
+
+    assert page_status.state == "succeeded"
+    assert page_status.started_at is not None
+    assert page_status.finished_at is not None
+    assert page_status.finished_at >= page_status.started_at
+    assert page_status.error is None
+
     page = manifest.pages[0]
+
     assert manifest.page_count == 1
     assert page.page_number == 1
     assert page.asset_id == "page_0001"
@@ -119,8 +115,19 @@ def test_render_pdf_pages_rejects_invalid_pdf(tmp_path: Path) -> None:
     input_pdf.write_bytes(b"not a PDF")
     run_dir = create_run(input_pdf, tmp_path / "runs")
 
-    with pytest.raises(pdfium.PdfiumError):
+    with pytest.raises(pdfium.PdfiumError) as exception:
         render_pdf_pages(run_dir)
+
+    status = load_run_status(run_dir)
+    page_status = status.phases.page_rendering
+
+    assert page_status.state == "failed"
+    assert page_status.started_at is not None
+    assert page_status.finished_at is not None
+    assert page_status.finished_at >= page_status.started_at
+    assert page_status.error is not None
+    assert page_status.error.type == type(exception.value).__name__
+    assert page_status.error.message == str(exception.value)
 
     assert not (run_dir / "pages.json").exists()
 
@@ -134,3 +141,19 @@ def test_render_pdf_pages_rejects_encrypted_pdf(tmp_path: Path) -> None:
         render_pdf_pages(run_dir)
 
     assert not (run_dir / "pages.json").exists()
+
+
+def write_pdf(path: Path, page_sizes: list[tuple[int, int]]) -> None:
+    writer = PdfWriter()
+    for width, height in page_sizes:
+        writer.add_blank_page(width=width, height=height)
+    with path.open("wb") as file:
+        writer.write(file)
+
+
+def write_encrypted_pdf(path: Path, password: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt(password)
+    with path.open("wb") as file:
+        writer.write(file)

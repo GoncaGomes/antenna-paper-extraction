@@ -8,7 +8,13 @@ import pypdfium2 as pdfium
 from pydantic import BaseModel, ConfigDict, Field
 
 from antenna_paper_extraction.persistence import read_json, write_bytes, write_json
-from antenna_paper_extraction.runs import sha256_file
+from antenna_paper_extraction.runs import (
+    PhaseFailure,
+    mark_page_rendering_failed,
+    mark_page_rendering_running,
+    mark_page_rendering_succeeded,
+    sha256_file,
+)
 
 
 class RenderingSettings(BaseModel):
@@ -52,74 +58,84 @@ def render_pdf_pages(
     dpi: int = 200,
 ) -> PagesManifest:
 
-    run_manifest = read_json(run_dir / "manifest.json")
-    source_relative_path = run_manifest["source_pdf"]["relative_path"]
-    source_pdf = run_dir / source_relative_path
-    output_dir = run_dir / "pages"
-    manifest_path = run_dir / "pages.json"
+    mark_page_rendering_running(run_dir)
 
-    _validate_source_pdf(source_pdf)
+    try:
+        run_manifest = read_json(run_dir / "manifest.json")
+        source_relative_path = run_manifest["source_pdf"]["relative_path"]
+        source_pdf = run_dir / source_relative_path
+        output_dir = run_dir / "pages"
+        manifest_path = run_dir / "pages.json"
 
-    if output_dir.exists() or manifest_path.exists():
-        raise FileExistsError(
-            f"Page rendering output already exists for run: {run_dir}"
-        )
+        _validate_source_pdf(source_pdf)
 
-    render_settings = RenderingSettings(
-        renderer_version=version("pypdfium2"),
-        dpi=dpi,
-    )
-
-    document_id = f"sha256:{sha256_file(source_pdf)}"
-    page_assets: list[PageAsset] = []
-
-    with pdfium.PdfDocument(source_pdf) as pdf:
-        page_count = len(pdf)
-
-        if page_count == 0:
-            raise ValueError("The source PDF does not contain any pages.")
-
-        output_dir.mkdir()
-
-        for page_index in range(page_count):
-            page_number = page_index + 1
-            asset_id = f"page_{page_number:04d}"
-            output_file = output_dir / f"{asset_id}.png"
-
-            page = pdf[page_index]
-
-            try:
-                image_bytes, width_pixels, height_pixels = _render_page_to_png(
-                    page, dpi=dpi
-                )
-            finally:
-                page.close()
-
-            write_bytes(output_file, image_bytes)
-
-            page_assets.append(
-                PageAsset(
-                    asset_id=asset_id,
-                    page_number=page_number,
-                    relative_path=output_file.relative_to(run_dir).as_posix(),
-                    width_pixels=width_pixels,
-                    height_pixels=height_pixels,
-                    size_bytes=len(image_bytes),
-                    sha256=hashlib.sha256(image_bytes).hexdigest(),
-                )
+        if output_dir.exists() or manifest_path.exists():
+            raise FileExistsError(
+                f"Page rendering output already exists for run: {run_dir}"
             )
 
-    pages_manifest = PagesManifest(
-        document_id=document_id,
-        page_count=page_count,
-        render_settings=render_settings,
-        pages=tuple(page_assets),
-    )
+        render_settings = RenderingSettings(
+            renderer_version=version("pypdfium2"),
+            dpi=dpi,
+        )
 
-    write_json(
-        manifest_path,
-        pages_manifest.model_dump(mode="json"),
-    )
+        document_id = f"sha256:{sha256_file(source_pdf)}"
+        page_assets: list[PageAsset] = []
+
+        with pdfium.PdfDocument(source_pdf) as pdf:
+            page_count = len(pdf)
+
+            if page_count == 0:
+                raise ValueError("The source PDF does not contain any pages.")
+
+            output_dir.mkdir()
+
+            for page_index in range(page_count):
+                page_number = page_index + 1
+                asset_id = f"page_{page_number:04d}"
+                output_file = output_dir / f"{asset_id}.png"
+
+                page = pdf[page_index]
+
+                try:
+                    image_bytes, width_pixels, height_pixels = _render_page_to_png(
+                        page, dpi=dpi
+                    )
+                finally:
+                    page.close()
+
+                write_bytes(output_file, image_bytes)
+
+                page_assets.append(
+                    PageAsset(
+                        asset_id=asset_id,
+                        page_number=page_number,
+                        relative_path=output_file.relative_to(run_dir).as_posix(),
+                        width_pixels=width_pixels,
+                        height_pixels=height_pixels,
+                        size_bytes=len(image_bytes),
+                        sha256=hashlib.sha256(image_bytes).hexdigest(),
+                    )
+                )
+
+        pages_manifest = PagesManifest(
+            document_id=document_id,
+            page_count=page_count,
+            render_settings=render_settings,
+            pages=tuple(page_assets),
+        )
+
+        write_json(
+            manifest_path,
+            pages_manifest.model_dump(mode="json"),
+        )
+
+        mark_page_rendering_succeeded(run_dir)
+
+    except Exception as e:
+        failure = PhaseFailure(type=type(e).__name__, message=str(e))
+        mark_page_rendering_failed(run_dir, failure)
+        raise
 
     return pages_manifest
 
