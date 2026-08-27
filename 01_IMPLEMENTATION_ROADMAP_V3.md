@@ -4,7 +4,7 @@
 **Version:** 3.0-draft  
 **Date:** 2026-08-24  
 **Architectural authority:** `00_ARCHITECTURE_V3.md`  
-**Current implementation phase:** not started  
+**Current implementation phase:** Phase 1 completion review  
 
 ## 1. Purpose
 
@@ -215,10 +215,10 @@ These constraints apply to all phases:
 
 ## 8. Phase 0 — foundation and project rules
 
-**Chat:** `00 — Foundation and project rules`  
+**Chat:** `00 - Foundation and project rules`  
 **Branch:** `chore/foundation`  
 **Model calls:** none  
-**Status:** not started
+**Status:** Completed
 
 ### 8.1 Objective
 
@@ -310,9 +310,9 @@ consumer existed.
 ## 9. Phase 1 — run lifecycle and source preservation
 
 **Chat:** `01 — Run lifecycle and source preservation`  
-**Branch:** `feat/run-lifecycle`  
+**Branch:** `feat/run-lifecycle-completion`  
 **Model calls:** none  
-**Status:** not started
+**Status:** implementation complete, awaiting merge
 
 ### 9.1 Objective
 

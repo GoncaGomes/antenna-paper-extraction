@@ -93,7 +93,6 @@ def render_pdf_pages(
             dpi=dpi,
         )
 
-        document_id = f"sha256:{sha256_file(source_pdf)}"
         page_assets: list[PageAsset] = []
 
         with pdfium.PdfDocument(source_pdf) as pdf:
