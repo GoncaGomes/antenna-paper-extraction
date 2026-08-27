@@ -5,7 +5,9 @@ description = "Evidence-grounded extraction of antenna architecture and reported
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "pillow",
     "pydantic>=2.13.4",
+    "pypdfium2>=5.13.0",
     "tzdata>=2026.3",
 ]
 
@@ -18,6 +20,7 @@ antenna-extract = "antenna_paper_extraction.cli:main"
 
 [dependency-groups]
 dev = [
+    "pypdf>=6.16.2",
     "pytest>=9.1.1",
     "ruff>=0.16.4",
 ]

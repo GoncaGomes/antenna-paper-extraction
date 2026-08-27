@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from antenna_paper_extraction.persistence import read_json, write_json
+from antenna_paper_extraction import persistence
+from antenna_paper_extraction.persistence import read_json, write_bytes, write_json
 
 
 def test_write_and_read_json(tmp_path: Path) -> None:
@@ -33,3 +34,29 @@ def test_read_json_rejects_non_object_root(tmp_path: Path) -> None:
 
     with pytest.raises(TypeError, match="JSON root must be an object"):
         read_json(input_path)
+
+
+def test_write_bytes_writes_exact_binary_content(tmp_path: Path) -> None:
+    destination_path = tmp_path / "nested" / "asset.bin"
+    binary_content = b"\x00\x01antenna\xff"
+
+    write_bytes(destination_path, binary_content)
+
+    assert destination_path.read_bytes() == binary_content
+
+
+def test_write_bytes_removes_temporary_file_after_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination_path = tmp_path / "nested" / "asset.bin"
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        write_bytes(destination_path, b"\x00\x01antenna\xff")
+
+    assert list(destination_path.parent.iterdir()) == []
+    assert not destination_path.exists()
