@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 from pypdf import PdfWriter
 
+from antenna_paper_extraction import pages
 from antenna_paper_extraction.pages import render_pdf_pages
 from antenna_paper_extraction.runs import (
     create_run,
@@ -140,6 +141,94 @@ def test_render_pdf_pages_rejects_encrypted_pdf(tmp_path: Path) -> None:
     with pytest.raises(pdfium.PdfiumError):
         render_pdf_pages(run_dir)
 
+    assert not (run_dir / "pages.json").exists()
+
+
+def test_render_pdf_pages_rejects_modified_preserved_pdf(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+    preserved_pdf = run_dir / "input" / input_pdf.name
+
+    write_pdf(preserved_pdf, [(144, 144)])
+
+    with pytest.raises(
+        ValueError,
+        match="checksum does not match manifest",
+    ) as exception:
+        render_pdf_pages(run_dir)
+
+    status = load_run_status(run_dir)
+    page_status = status.phases.page_rendering
+
+    assert page_status.state == "failed"
+    assert page_status.started_at is not None
+    assert page_status.finished_at is not None
+    assert page_status.finished_at >= page_status.started_at
+    assert page_status.error is not None
+    assert page_status.error.type == "ValueError"
+    assert page_status.error.message == str(exception.value)
+
+    assert not (run_dir / "pages").exists()
+    assert not (run_dir / "pages.json").exists()
+
+
+def test_render_pdf_pages_preserves_completed_assets_after_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72), (144, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+
+    original_render_page = pages._render_page_to_png
+    render_call_count = 0
+
+    def fail_on_second_page(
+        page: pdfium.PdfPage,
+        *,
+        dpi: int,
+    ) -> tuple[bytes, int, int]:
+        nonlocal render_call_count
+        render_call_count += 1
+
+        if render_call_count == 2:
+            raise RuntimeError("simulated second-page rendering failure")
+
+        return original_render_page(page, dpi=dpi)
+
+    monkeypatch.setattr(
+        pages,
+        "_render_page_to_png",
+        fail_on_second_page,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="simulated second-page rendering failure",
+    ):
+        render_pdf_pages(run_dir)
+
+    status = load_run_status(run_dir)
+    page_status = status.phases.page_rendering
+
+    assert status.phases.source_preservation.state == "succeeded"
+
+    assert page_status.state == "failed"
+    assert page_status.started_at is not None
+    assert page_status.finished_at is not None
+    assert page_status.finished_at >= page_status.started_at
+    assert page_status.error is not None
+    assert page_status.error.type == "RuntimeError"
+    assert page_status.error.message == "simulated second-page rendering failure"
+
+    assert (run_dir / "input" / input_pdf.name).is_file()
+    assert (run_dir / "pages" / "page_0001.png").is_file()
+    assert not (run_dir / "pages" / "page_0002.png").exists()
     assert not (run_dir / "pages.json").exists()
 
 
