@@ -7,9 +7,10 @@ from typing import Literal
 import pypdfium2 as pdfium
 from pydantic import BaseModel, ConfigDict, Field
 
-from antenna_paper_extraction.persistence import read_json, write_bytes, write_json
+from antenna_paper_extraction.persistence import write_bytes, write_json
 from antenna_paper_extraction.runs import (
     PhaseFailure,
+    RunManifest,
     mark_page_rendering_failed,
     mark_page_rendering_running,
     mark_page_rendering_succeeded,
@@ -61,13 +62,26 @@ def render_pdf_pages(
     mark_page_rendering_running(run_dir)
 
     try:
-        run_manifest = read_json(run_dir / "manifest.json")
-        source_relative_path = run_manifest["source_pdf"]["relative_path"]
-        source_pdf = run_dir / source_relative_path
+        run_manifest_path = run_dir / "manifest.json"
+        run_manifest = RunManifest.model_validate_json(
+            run_manifest_path.read_text(encoding="utf-8")
+        )
+
+        source_pdf = run_dir / run_manifest.source_pdf.relative_path
         output_dir = run_dir / "pages"
         manifest_path = run_dir / "pages.json"
 
         _validate_source_pdf(source_pdf)
+
+        source_sha256 = sha256_file(source_pdf)
+
+        if source_sha256 != run_manifest.source_pdf.sha256:
+            raise ValueError("Run source PDF checksum does not match manifest.")
+
+        document_id = f"sha256:{source_sha256}"
+
+        if document_id != run_manifest.document_id:
+            raise ValueError("Run document identity does not match manifest.")
 
         if output_dir.exists() or manifest_path.exists():
             raise FileExistsError(
@@ -119,7 +133,7 @@ def render_pdf_pages(
                 )
 
         pages_manifest = PagesManifest(
-            document_id=document_id,
+            document_id=run_manifest.document_id,
             page_count=page_count,
             render_settings=render_settings,
             pages=tuple(page_assets),
