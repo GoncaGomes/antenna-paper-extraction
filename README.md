@@ -59,6 +59,7 @@ Create the environment and install the project dependencies:
 uv sync
 ```
 
+
 Verify that the command-line interface is available:
 ```bash
 uv run antenna-extract --help
@@ -100,7 +101,8 @@ run_<id>/
 └── status.json
 ```
 
-`manifest.json` records the stable run and document identity. pages.json describes the ordered rendered assets. status.json records lifecycle timestamps and inspectable phase failures.
+`manifest.json` records the stable run and document identity. `pages.json` describes the ordered rendered assets. `status.json` records lifecycle timestamps and inspectable phase failures.
+
 The commands currently stop after page rendering. They do not yet perform document conversion or call a model.
 
 ## Development checks

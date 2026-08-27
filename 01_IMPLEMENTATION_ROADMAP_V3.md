@@ -1,6 +1,6 @@
 # Antenna Extraction v3 — Implementation Roadmap
 
-**Status:** proposed execution plan for the new repository  
+**Status:** active execution plan 
 **Version:** 3.0-draft  
 **Date:** 2026-08-24  
 **Architectural authority:** `00_ARCHITECTURE_V3.md`  
@@ -395,19 +395,24 @@ feat(run): preserve structured phase failures
 
 Behaviour:
 
-- record phase start, success, failure, and skipped states;
+- record phase start, success, and failure states;
 - preserve completed artefacts after a later failure;
-- redact secrets from error records;
+- preserve structured error type and message;
 - prevent a handled exception from leaving a phase marked as running;
-- expose a concise human-readable status.
+- expose concise human-readable CLI failures.
+
+The Phase 1 baseline deliberately omits skipped states and attempt counters
+because it has no branching or retry execution. Secret redaction is deferred to
+Phase 2, where model-client traces and credential-bearing errors are introduced.
+These capabilities must be added with their first concrete consumers.
 
 Tests:
 
 - controlled rendering failure;
-- secret redaction;
 - completed input artefacts survive failure;
 - invalid transitions are rejected;
-- failure records point to the correct phase and attempt.
+- failure records identify the correct phase and error;
+- modified preserved inputs are rejected before rendering.
 
 ### 9.6 Phase 1 completion gate
 
