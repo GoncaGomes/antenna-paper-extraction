@@ -436,7 +436,7 @@ a workflow engine.
 - **Chat:** `02 — NuExtract3 DocumentPackage`
 - **Branch:** `feat/document-package`
 - **Normal model calls:** one
-- **Status:** Status: next phase, not started
+- **Status:** next phase, not started
 
 ### 10.1 Objective
 
