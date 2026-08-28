@@ -4,7 +4,7 @@
 - **Version:** 3.0-draft
 - **Date:** 2026-08-24
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
-- **Current implementation phase:** Phase 2 preparation 
+- **Current implementation phase:** Phase 2 preparation
 
 ## 1. Purpose
 
