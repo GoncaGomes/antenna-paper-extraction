@@ -4,7 +4,7 @@
 - **Version:** 3.0-draft
 - **Date:** 2026-08-24
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
-- **Current implementation phase:** Phase 1 completion review
+- **Current implementation phase:** Phase 2 preparation 
 
 ## 1. Purpose
 
@@ -312,7 +312,8 @@ consumer existed.
 - **Chat:** `01 — Run lifecycle and source preservation`
 - **Branch:** `feat/run-lifecycle-completion`
 - **Model calls:** none
-- **Status:** implementation complete, awaiting merge
+- **Status:** completed
+- **Accepted squash merge SHA:** 9691dd69e622be0b3606028819308f240c00dd12
 
 ### 9.1 Objective
 
@@ -435,7 +436,7 @@ a workflow engine.
 - **Chat:** `02 — NuExtract3 DocumentPackage`
 - **Branch:** `feat/document-package`
 - **Normal model calls:** one
-- **Status:** not started
+- **Status:** Status: next phase, not started
 
 ### 10.1 Objective
 
@@ -1748,16 +1749,27 @@ The first v3 baseline is complete only when all of the following are true.
 
 ## 26. Immediate next action
 
-After these two documents are added to the new ChatGPT Project Sources, begin
-only Phase 0:
+Phase 1 is complete and was integrated into `main` with squash merge
+`9691dd69e622be0b3606028819308f240c00dd12`.
 
-1. create the new GitHub repository;
-2. create chat `00 — Foundation and project rules`;
-3. decide the repository name, Python/tooling baseline, documentation location,
-   and `AGENTS.md`/Project Instructions;
-4. create branch `chore/foundation`;
-5. implement Candidate Commit 0A only;
-6. review its diff before discussing Candidate Commit 0B.
+After this roadmap update is merged and the ChatGPT Project Source is refreshed,
+begin only Phase 2:
 
-Do not copy application code from v2 during this first commit. The first code
-port is considered only in Phase 1, when it has a concrete, testable consumer.
+1. update the local repository from the accepted `main`;
+2. create chat `02 — NuExtract3 DocumentPackage`;
+3. read `00_ARCHITECTURE_V3.md` and this roadmap completely;
+4. inspect the current HEAD, working tree, Phase 1 artefacts, code, and tests;
+5. run an explicit, sequential capability probe against the deployed
+   NuExtract3 endpoint;
+6. record the observed input route, response format, Markdown behaviour, figure
+   outputs, limits, finish metadata, and redacted failure behaviour;
+7. resolve the package location, manifest boundary, and lifecycle compatibility
+   decisions using the probe results;
+8. agree on the smallest coherent implementation of Candidate Commit 2A;
+9. review that commit and its local tests before discussing Candidate Commit
+    2B.
+
+Production code must not assume undocumented NuExtract3 capabilities. If the
+capability probe does not establish a reliable route for complete Markdown or
+figure materialization, stop and record the measured limitation before changing
+the architecture or expanding the implementation.
