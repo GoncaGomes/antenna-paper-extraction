@@ -4,7 +4,7 @@
 - **Version:** 3.0-draft
 - **Date:** 2026-08-24
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
-- **Current implementation phase:** Phase 2 preparation
+- **Current implementation phase:** Phase 2 - NuExtract3 DocumentPackage
 
 ## 1. Purpose
 
@@ -436,7 +436,7 @@ a workflow engine.
 - **Chat:** `02 — NuExtract3 DocumentPackage`
 - **Branch:** `feat/document-package`
 - **Normal model calls:** one
-- **Status:** next phase, not started
+- **Status:** in progress
 
 ### 10.1 Objective
 
