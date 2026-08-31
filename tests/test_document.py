@@ -77,7 +77,7 @@ def test_build_document_messages_preserves_page_order_and_identity(
     ]
 
 
-def test_build_document_messages_rejects_modidied_page_content(
+def test_build_document_messages_rejects_modified_page_content(
     tmp_path: Path,
 ) -> None:
     pages_dir = tmp_path / "pages"
@@ -133,5 +133,59 @@ def test_build_document_messages_rejects_path_outside_run(
     with pytest.raises(ValueError, match="path escapes run directory"):
         build_document_messages(
             run_dir=run_dir,
+            pages=(page,),
+        )
+
+
+def test_build_document_messages_rejects_missing_page(
+    tmp_path: Path,
+) -> None:
+    expected_page_bytes = b"missing-page"
+
+    page = PageAsset(
+        asset_id="page_0001",
+        page_number=1,
+        relative_path="pages/page_0001.png",
+        width_pixels=1,
+        height_pixels=1,
+        size_bytes=len(expected_page_bytes),
+        sha256=hashlib.sha256(expected_page_bytes).hexdigest(),
+    )
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="Page asset does not exist",
+    ):
+        build_document_messages(
+            run_dir=tmp_path,
+            pages=(page,),
+        )
+
+
+def test_build_document_messages_rejects_incorrect_page_size(
+    tmp_path: Path,
+) -> None:
+    pages_dir = tmp_path / "pages"
+    pages_dir.mkdir()
+
+    page_bytes = b"page-content"
+    (pages_dir / "page_0001.png").write_bytes(page_bytes)
+
+    page = PageAsset(
+        asset_id="page_0001",
+        page_number=1,
+        relative_path="pages/page_0001.png",
+        width_pixels=1,
+        height_pixels=1,
+        size_bytes=len(page_bytes) + 1,
+        sha256=hashlib.sha256(page_bytes).hexdigest(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="size does not match manifest",
+    ):
+        build_document_messages(
+            run_dir=tmp_path,
             pages=(page,),
         )

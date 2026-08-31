@@ -10,11 +10,12 @@ def test_create_raw_chat_completion_preserves_bytes_without_parsing() -> None:
     raw_body = b'{"id":"response-test","choices":[]}'
 
     class FakeRawResponse:
-        status_code = 200
-        headers = {"content-type": "application/json"}
-        content = raw_body
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers = {"content-type": "application/json"}
+            self.content = raw_body
 
-        def parse(self):
+        def parse(self) -> None:
             raise AssertionError("The SDK parser must not be called")
 
     calls: list[dict[str, object]] = []

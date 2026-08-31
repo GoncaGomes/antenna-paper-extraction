@@ -2,10 +2,10 @@ import hashlib
 import io
 from importlib.metadata import version
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import pypdfium2 as pdfium
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from antenna_paper_extraction.persistence import write_bytes, write_json
 from antenna_paper_extraction.runs import (
@@ -51,6 +51,39 @@ class PagesManifest(BaseModel):
     page_count: int = Field(ge=1)
     render_settings: RenderingSettings
     pages: tuple[PageAsset, ...]
+
+    @model_validator(mode="after")
+    def validate_page_consistency(self) -> Self:
+        if len(self.pages) != self.page_count:
+            raise ValueError("Page count does not match page asset count.")
+
+        expected_page_numbers = tuple(range(1, self.page_count + 1))
+        actual_page_numbers = tuple(page.page_number for page in self.pages)
+
+        if actual_page_numbers != expected_page_numbers:
+            raise ValueError(
+                "Pages must be contiguous, one-based, and ordered by page_number."
+            )
+
+        for page in self.pages:
+            expected_asset_id = f"page_{page.page_number:04d}"
+            if page.asset_id != expected_asset_id:
+                raise ValueError(
+                    f"Page asset_id does not match page_number: {page.asset_id}"
+                )
+            expected_relative_path = f"pages/{expected_asset_id}.png"
+            if page.relative_path != expected_relative_path:
+                raise ValueError(
+                    "Page relative_path does not match its canonical identity: "
+                    f"{page.relative_path}"
+                )
+
+        return self
+
+
+def load_pages_manifest(run_dir: Path) -> PagesManifest:
+    manifest_path = run_dir / "pages.json"
+    return PagesManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
 
 
 def render_pdf_pages(
