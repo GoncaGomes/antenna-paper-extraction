@@ -1,8 +1,13 @@
 import base64
 import hashlib
+import re
+
+from dataclasses import dataclass
 from pathlib import Path
+from pydantic import BaseModel, ConfigDict
 
 from antenna_paper_extraction.pages import PageAsset
+from antenna_paper_extraction.model_client import RawChatCompletion
 
 DOCUMENT_CONVERSION_INSTRUCTION = (
     "Convert the following page images into one Markdown document "
@@ -13,6 +18,78 @@ DOCUMENT_CONVERSION_INSTRUCTION = (
     "in the output. Do not rename, omit, duplicate, or reorder "
     "the PAGE_ID markers."
 )
+
+PAGE_ID_PATTERN = re.compilere.compile(r"<!-- PAGE_ID: (page_[0-9]{4,}) -->")
+
+
+class _ResponseMessage(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+
+    content: str
+
+
+class _ResponseChoice(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+
+    index: int
+    message: _ResponseMessage
+    finish_reason: str | None
+
+
+class _ChatCompletionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    model: str | None = None
+    choices: list[_ResponseChoice]
+    usage: dict[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedDocumentResponse:
+    markdown: str
+    model: str | None
+    finish_reason: str
+    usage: dict[str, object] | None
+
+
+def parse_document_markdown_response(
+    *,
+    response: RawChatCompletion,
+    expected_page_ids: tuple[str, ...],
+) -> ParsedDocumentResponse:
+    if not 200 <= response.status_code < 300:
+        raise ValueError(
+            f"NuExtract3 returned an unsuccessful HTTP status: {response.status_code}"
+        )
+
+    parsed_response = _ChatCompletionResponse.model_validate_json(response.body)
+
+    if len(parsed_response.choices) != 1:
+        raise ValueError("NuExtract3 response must contain exactly one choice.")
+
+    choice = parsed_response.choices[0]
+
+    if choice.finish_reason != "stop":
+        raise ValueError(
+            f"NuExtract3 response did not finish successfully: {choice.finish_reason}"
+        )
+
+    markdown = choice.message.content
+
+    if not markdown.strip():
+        raise ValueError("NuExtract3 returned empty Markdown content.")
+
+    actual_page_ids = tuple(PAGE_ID_PATTERN.findall(markdown))
+
+    if actual_page_ids != expected_page_ids:
+        raise ValueError(f"NuExtract3 returned unexpected page IDs: {actual_page_ids}")
+
+    return ParsedDocumentResponse(
+        markdown=markdown,
+        model=parsed_response.model,
+        finish_reason=choice.finish_reason,
+        usage=parsed_response.usage,
+    )
 
 
 def build_document_messages(
