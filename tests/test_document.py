@@ -1,12 +1,16 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from antenna_paper_extraction.document import (
     DOCUMENT_CONVERSION_INSTRUCTION,
     build_document_messages,
+    parse_document_markdown_response,
 )
+from antenna_paper_extraction.model_client import RawChatCompletion
 from antenna_paper_extraction.pages import PageAsset
 
 
@@ -188,4 +192,83 @@ def test_build_document_messages_rejects_incorrect_page_size(
         build_document_messages(
             run_dir=tmp_path,
             pages=(page,),
+        )
+
+
+def test_parse_document_markdown_response_accepts_openai_compatible_envelope() -> None:
+    markdown = "<!-- PAGE_ID: page_0001 -->\n# Test document"
+
+    usage = {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+    }
+
+    response_payload = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1788253200,
+        "model": "nuextract3",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": markdown,
+                    "refusal": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": usage,
+        "system_fingerprint": None,
+        "service_tier": "default",
+    }
+
+    response = RawChatCompletion(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body=json.dumps(response_payload).encode("utf-8"),
+    )
+
+    parsed_response = parse_document_markdown_response(
+        response=response,
+        expected_page_ids=("page_0001",),
+    )
+
+    assert parsed_response.markdown == markdown
+    assert parsed_response.finish_reason == "stop"
+    assert parsed_response.usage == usage
+
+
+def test_parse_document_markdown_response_rejects_non_string_content() -> None:
+    response_payload = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1788253200,
+        "model": "nuextract3",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": 123,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": None,
+    }
+
+    response = RawChatCompletion(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body=json.dumps(response_payload).encode("utf-8"),
+    )
+
+    with pytest.raises(ValidationError, match="content"):
+        parse_document_markdown_response(
+            response=response,
+            expected_page_ids=("page_0001",),
         )

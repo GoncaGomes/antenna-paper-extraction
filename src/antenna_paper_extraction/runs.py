@@ -363,7 +363,7 @@ def mark_document_conversion_failed(run_dir: Path, failure: PhaseFailure) -> Run
     current_conversion_status = current_status.phases.document_conversion
 
     if current_conversion_status.state != "running":
-        raise ValueError("page rendering can only fail from the running state")
+        raise ValueError("document conversion can only fail from the running state")
 
     finished_at = datetime.now(PORTUGAL_TIMEZONE)
 

@@ -57,7 +57,7 @@ class _ResponseChoice(BaseModel):
 
 
 class _ChatCompletionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     model: str | None = None
     choices: list[_ResponseChoice]
