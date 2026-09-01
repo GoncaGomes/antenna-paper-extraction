@@ -320,9 +320,7 @@ def mark_document_conversion_running(run_dir: Path) -> RunStatus:
         phases=RunPhases(
             source_preservation=current_status.phases.source_preservation,
             page_rendering=current_status.phases.page_rendering,
-            document_conversion=PhaseStatus(
-                state="running", started_at=started_at
-            ),
+            document_conversion=PhaseStatus(state="running", started_at=started_at),
         ),
     )
 
@@ -330,18 +328,14 @@ def mark_document_conversion_running(run_dir: Path) -> RunStatus:
 
     return updated_status
 
+
 def mark_document_conversion_succeeded(run_dir: Path) -> RunStatus:
     run_dir = Path(run_dir)
     current_status = load_run_status(run_dir)
-    current_conversion_status = (
-        current_status.phases.document_conversion
-        )
+    current_conversion_status = current_status.phases.document_conversion
 
     if current_conversion_status.state != "running":
-        raise ValueError(
-            "document conversion can only succeed from the running state"
-        )
-
+        raise ValueError("document conversion can only succeed from the running state")
 
     finished_at = datetime.now(PORTUGAL_TIMEZONE)
 
@@ -355,19 +349,18 @@ def mark_document_conversion_succeeded(run_dir: Path) -> RunStatus:
                 state="succeeded",
                 started_at=current_conversion_status.started_at,
                 finished_at=finished_at,
-            )
+            ),
         ),
     )
     write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
 
     return updated_status
 
+
 def mark_document_conversion_failed(run_dir: Path, failure: PhaseFailure) -> RunStatus:
     run_dir = Path(run_dir)
     current_status = load_run_status(run_dir)
-    current_conversion_status = (
-            current_status.phases.document_conversion
-            )
+    current_conversion_status = current_status.phases.document_conversion
 
     if current_conversion_status.state != "running":
         raise ValueError("page rendering can only fail from the running state")

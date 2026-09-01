@@ -3,6 +3,8 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,7 +16,10 @@ from antenna_paper_extraction.pages import (
     PageAsset,
     load_pages_manifest,
 )
-from antenna_paper_extraction.persistence import write_bytes
+from antenna_paper_extraction.persistence import (
+    write_bytes,
+    write_json,
+)
 from antenna_paper_extraction.runs import (
     PhaseFailure,
     RunManifest,
@@ -67,6 +72,19 @@ class ParsedDocumentResponse:
     usage: dict[str, object] | None
 
 
+class DocumentConversionTrace(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    requested_model: str
+    temperature: float
+    mode: Literal["markdown"]
+    enable_thinking: bool
+    http_status_code: int
+    finish_reason: str
+    usage: dict[str, object] | None
+    model_latency_seconds: float
+
+
 def parse_document_markdown_response(
     *,
     response: RawChatCompletion,
@@ -108,15 +126,17 @@ def parse_document_markdown_response(
 
 
 def convert_document_to_markdown(
-        *,
-        run_dir: Path,
-        client: OpenAICompatibleClient,
-        model: str,
+    *,
+    run_dir: Path,
+    client: OpenAICompatibleClient,
+    model: str,
 ) -> Path:
     run_dir = Path(run_dir)
 
     run_manifest_path = run_dir / "manifest.json"
-    run_manifest = RunManifest.model_validate_json(run_manifest_path.read_test(encoding="utf-8"))
+    run_manifest = RunManifest.model_validate_json(
+        run_manifest_path.read_text(encoding="utf-8")
+    )
 
     pages_manifest = load_pages_manifest(run_dir)
     run_status = load_run_status(run_dir)
@@ -132,26 +152,25 @@ def convert_document_to_markdown(
 
     raw_response_path = run_dir / "nuextract3_raw_response.json"
     document_path = run_dir / "document.md"
+    trace_path = run_dir / "nuextract3_trace.json"
 
-    existing_outputs = tuple (
-        path
-        for path in [raw_response_path, document_path]
-        if path.exists()
+    existing_outputs = tuple(
+        path for path in (raw_response_path, document_path, trace_path) if path.exists()
     )
 
     if existing_outputs:
-        existing_names = ", ".join(
-            path.name for path in existing_outputs
-        )
+        existing_names = ", ".join(path.name for path in existing_outputs)
         raise FileExistsError(
-            "Document conversion output already exists: "
-            f"{existing_names}"
+            f"Document conversion output already exists: {existing_names}"
         )
+
+    temperature = 0.0
+    mode: Literal["markdown"] = "markdown"
+    enable_thinking = False
 
     mark_document_conversion_running(run_dir)
 
     failure_stage = "request preparation"
-
 
     try:
         messages = build_document_messages(
@@ -160,18 +179,21 @@ def convert_document_to_markdown(
         )
 
         failure_stage = "model request"
+        request_started = perf_counter()
 
         response = client.create_raw_chat_completion(
             model=model,
             messages=messages,
-            temperature=0.0,
+            temperature=temperature,
             extra_body={
                 "chat_template_kwargs": {
-                    "mode": "markdown",
-                    "enable_thinking": False,
+                    "mode": mode,
+                    "enable_thinking": enable_thinking,
                 }
             },
         )
+
+        model_latency_seconds = perf_counter() - request_started
 
         failure_stage = "raw response persistence"
 
@@ -184,10 +206,25 @@ def convert_document_to_markdown(
 
         parsed_response = parse_document_markdown_response(
             response=response,
-            expected_page_ids=tuple(
-                page.asset_id
-                for page in pages_manifest.pages
-            ),
+            expected_page_ids=tuple(page.asset_id for page in pages_manifest.pages),
+        )
+
+        failure_stage = "trace persistence"
+
+        trace = DocumentConversionTrace(
+            requested_model=model,
+            temperature=temperature,
+            mode=mode,
+            enable_thinking=enable_thinking,
+            http_status_code=response.status_code,
+            finish_reason=parsed_response.finish_reason,
+            usage=parsed_response.usage,
+            model_latency_seconds=model_latency_seconds,
+        )
+
+        write_json(
+            trace_path,
+            trace.model_dump(mode="json"),
         )
 
         failure_stage = "document persistence"
@@ -204,10 +241,7 @@ def convert_document_to_markdown(
     except Exception as error:
         failure = PhaseFailure(
             type=type(error).__name__,
-            message=(
-                "Document conversion failed during "
-                f"{failure_stage}."
-            ),
+            message=(f"Document conversion failed during {failure_stage}."),
         )
 
         mark_document_conversion_failed(
