@@ -1,13 +1,28 @@
 import base64
 import hashlib
 import re
-
 from dataclasses import dataclass
 from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict
 
-from antenna_paper_extraction.pages import PageAsset
-from antenna_paper_extraction.model_client import RawChatCompletion
+from antenna_paper_extraction.model_client import (
+    OpenAICompatibleClient,
+    RawChatCompletion,
+)
+from antenna_paper_extraction.pages import (
+    PageAsset,
+    load_pages_manifest,
+)
+from antenna_paper_extraction.persistence import write_bytes
+from antenna_paper_extraction.runs import (
+    PhaseFailure,
+    RunManifest,
+    load_run_status,
+    mark_document_conversion_failed,
+    mark_document_conversion_running,
+    mark_document_conversion_succeeded,
+)
 
 DOCUMENT_CONVERSION_INSTRUCTION = (
     "Convert the following page images into one Markdown document "
@@ -19,7 +34,7 @@ DOCUMENT_CONVERSION_INSTRUCTION = (
     "the PAGE_ID markers."
 )
 
-PAGE_ID_PATTERN = re.compilere.compile(r"<!-- PAGE_ID: (page_[0-9]{4,}) -->")
+PAGE_ID_PATTERN = re.compile(r"<!-- PAGE_ID: (page_[0-9]{4,}) -->")
 
 
 class _ResponseMessage(BaseModel):
@@ -90,6 +105,119 @@ def parse_document_markdown_response(
         finish_reason=choice.finish_reason,
         usage=parsed_response.usage,
     )
+
+
+def convert_document_to_markdown(
+        *,
+        run_dir: Path,
+        client: OpenAICompatibleClient,
+        model: str,
+) -> Path:
+    run_dir = Path(run_dir)
+
+    run_manifest_path = run_dir / "manifest.json"
+    run_manifest = RunManifest.model_validate_json(run_manifest_path.read_test(encoding="utf-8"))
+
+    pages_manifest = load_pages_manifest(run_dir)
+    run_status = load_run_status(run_dir)
+
+    if run_status.run_id != run_manifest.run_id:
+        raise ValueError("Run status identity does not match the run manifest")
+
+    if run_status.phases.page_rendering.state != "succeeded":
+        raise ValueError("Page rendering must succeed before document conversion")
+
+    if pages_manifest.document_id != run_manifest.document_id:
+        raise ValueError("Page manifest document identity does not match run manifest")
+
+    raw_response_path = run_dir / "nuextract3_raw_response.json"
+    document_path = run_dir / "document.md"
+
+    existing_outputs = tuple (
+        path
+        for path in [raw_response_path, document_path]
+        if path.exists()
+    )
+
+    if existing_outputs:
+        existing_names = ", ".join(
+            path.name for path in existing_outputs
+        )
+        raise FileExistsError(
+            "Document conversion output already exists: "
+            f"{existing_names}"
+        )
+
+    mark_document_conversion_running(run_dir)
+
+    failure_stage = "request preparation"
+
+
+    try:
+        messages = build_document_messages(
+            run_dir=run_dir,
+            pages=pages_manifest.pages,
+        )
+
+        failure_stage = "model request"
+
+        response = client.create_raw_chat_completion(
+            model=model,
+            messages=messages,
+            temperature=0.0,
+            extra_body={
+                "chat_template_kwargs": {
+                    "mode": "markdown",
+                    "enable_thinking": False,
+                }
+            },
+        )
+
+        failure_stage = "raw response persistence"
+
+        write_bytes(
+            raw_response_path,
+            response.body,
+        )
+
+        failure_stage = "response parsing"
+
+        parsed_response = parse_document_markdown_response(
+            response=response,
+            expected_page_ids=tuple(
+                page.asset_id
+                for page in pages_manifest.pages
+            ),
+        )
+
+        failure_stage = "document persistence"
+
+        write_bytes(
+            document_path,
+            parsed_response.markdown.encode("utf-8"),
+        )
+
+        failure_stage = "status update"
+
+        mark_document_conversion_succeeded(run_dir)
+
+    except Exception as error:
+        failure = PhaseFailure(
+            type=type(error).__name__,
+            message=(
+                "Document conversion failed during "
+                f"{failure_stage}."
+            ),
+        )
+
+        mark_document_conversion_failed(
+            run_dir,
+            failure,
+        )
+
+        raise
+
+    return document_path
 
 
 def build_document_messages(
