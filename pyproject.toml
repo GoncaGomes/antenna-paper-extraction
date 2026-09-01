@@ -9,6 +9,7 @@ dependencies = [
     "pillow",
     "pydantic>=2.13.4",
     "pypdfium2>=5.13.0",
+    "python-dotenv>=1.2.3",
     "tzdata>=2026.3",
 ]
 
