@@ -23,7 +23,7 @@ class RenderingSettings(BaseModel):
 
     renderer_name: Literal["pypdfium2"] = "pypdfium2"
     renderer_version: str = Field(min_length=1)
-    dpi: int = Field(default=200, gt=0)
+    dpi: int = Field(default=170, gt=0)
     image_format: Literal["png"] = "png"
     color_space: Literal["RGB"] = "RGB"
     background_color: Literal["white"] = "white"
