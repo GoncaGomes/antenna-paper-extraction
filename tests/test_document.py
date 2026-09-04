@@ -194,7 +194,7 @@ def test_build_document_messages_rejects_incorrect_page_size(
 
 
 def test_parse_document_markdown_response_accepts_openai_compatible_envelope() -> None:
-    markdown = "<!-- PAGE_ID: page_0001 -->\n# Test document"
+    markdown = "# Test document"
 
     usage = {
         "prompt_tokens": 120,
@@ -275,7 +275,7 @@ def test_convert_document_to_markdown_persists_successful_conversion(
 ) -> None:
     run_dir = _create_rendered_run(tmp_path)
 
-    markdown = "<!-- PAGE_ID: page_0001 -->\n# Test document"
+    markdown = "# Test document"
 
     usage = {
         "prompt_tokens": 120,

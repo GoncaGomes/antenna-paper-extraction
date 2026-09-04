@@ -200,7 +200,7 @@ def test_render_pages_does_not_hide_unexpected_failure(
         *,
         dpi: int,
     ) -> SimpleNamespace:
-        assert dpi == 200
+        assert dpi == 170
         raise RuntimeError("simulated programming error")
 
     monkeypatch.setattr(

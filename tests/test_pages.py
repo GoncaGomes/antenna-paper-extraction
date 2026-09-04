@@ -40,7 +40,7 @@ def test_render_pdf_pages_renders_one_page(tmp_path: Path) -> None:
     assert page.asset_id == "page_0001"
     assert page.relative_path == "pages/page_0001.png"
     assert (run_dir / page.relative_path).is_file()
-    assert (run_dir / "pages.json").is_file()
+    assert (run_dir / "pages" / "pages.json").is_file()
 
 
 def test_render_pdf_pages_preserves_source_order(tmp_path: Path) -> None:
@@ -68,9 +68,9 @@ def test_render_pdf_pages_preserves_source_order(tmp_path: Path) -> None:
         "page_0003.png",
     ]
     assert [(page.width_pixels, page.height_pixels) for page in manifest.pages] == [
-        (200, 200),
-        (400, 200),
-        (200, 400),
+        (170, 170),
+        (340, 170),
+        (170, 340),
     ]
 
 
@@ -83,7 +83,9 @@ def test_render_pdf_pages_writes_consistent_manifest_and_assets(
 
     render_pdf_pages(run_dir)
 
-    manifest = json.loads((run_dir / "pages.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (run_dir / "pages" / "pages.json").read_text(encoding="utf-8")
+    )
     source_pdf = run_dir / "input" / "source.pdf"
     source_sha256 = hashlib.sha256(source_pdf.read_bytes()).hexdigest()
 
@@ -96,7 +98,7 @@ def test_render_pdf_pages_writes_consistent_manifest_and_assets(
     render_settings = manifest["render_settings"]
     assert render_settings["renderer_name"] == "pypdfium2"
     assert render_settings["renderer_version"]
-    assert render_settings["dpi"] == 200
+    assert render_settings["dpi"] == 170
     assert render_settings["image_format"] == "png"
     assert render_settings["color_space"] == "RGB"
     assert render_settings["background_color"] == "white"
@@ -275,7 +277,7 @@ def test_load_pages_manifest_rejects_page_count_mismatch(
     run_dir = create_run(input_pdf, tmp_path / "runs")
     render_pdf_pages(run_dir)
 
-    manifest_path = run_dir / "pages.json"
+    manifest_path = run_dir / "pages" / "pages.json"
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_data["page_count"] = 3
     manifest_path.write_text(
@@ -299,7 +301,7 @@ def test_load_pages_manifest_rejects_out_of_order_pages(
     run_dir = create_run(input_pdf, tmp_path / "runs")
     render_pdf_pages(run_dir)
 
-    manifest_path = run_dir / "pages.json"
+    manifest_path = run_dir / "pages" / "pages.json"
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_data["pages"] = list(reversed(manifest_data["pages"]))
     manifest_path.write_text(
@@ -323,7 +325,7 @@ def test_load_pages_manifest_rejects_mismatched_asset_id(
     run_dir = create_run(input_pdf, tmp_path / "runs")
     render_pdf_pages(run_dir)
 
-    manifest_path = run_dir / "pages.json"
+    manifest_path = run_dir / "pages" / "pages.json"
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_data["pages"][0]["asset_id"] = "page_9999"
     manifest_path.write_text(
@@ -347,7 +349,7 @@ def test_load_pages_manifest_rejects_mismatched_relative_path(
     run_dir = create_run(input_pdf, tmp_path / "runs")
     render_pdf_pages(run_dir)
 
-    manifest_path = run_dir / "pages.json"
+    manifest_path = run_dir / "pages" / "pages.json"
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_data["pages"][0]["relative_path"] = "pages/page_9999.png"
     manifest_path.write_text(
@@ -378,7 +380,10 @@ def test_load_pages_manifest_rejects_malformed_json(
     run_dir = tmp_path / "run"
     run_dir.mkdir()
 
-    manifest_path = run_dir / "pages.json"
+    page_dir = run_dir / "pages"
+    page_dir.mkdir()
+
+    manifest_path = run_dir / "pages" / "pages.json"
     manifest_path.write_text(
         "{not-valid-json",
         encoding="utf-8",
