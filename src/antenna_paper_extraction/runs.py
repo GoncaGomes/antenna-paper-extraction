@@ -107,6 +107,9 @@ class RunPhases(BaseModel):
 
     source_preservation: PhaseStatus
     page_rendering: PhaseStatus
+    document_conversion: PhaseStatus = Field(
+        default_factory=lambda: PhaseStatus(state="pending")
+    )
 
 
 class RunStatus(BaseModel):
@@ -177,6 +180,7 @@ def create_run(input_pdf: Path, runs_root: Path = Path("runs")) -> Path:
                     finished_at=source_finished_at,
                 ),
                 page_rendering=PhaseStatus(state="pending"),
+                document_conversion=PhaseStatus(state="pending"),
             ),
         )
         write_json(manifest_path, manifest.model_dump(mode="json"))
@@ -286,6 +290,92 @@ def mark_page_rendering_failed(run_dir: Path, failure: PhaseFailure) -> RunStatu
             page_rendering=PhaseStatus(
                 state="failed",
                 started_at=current_page_status.started_at,
+                finished_at=finished_at,
+                error=failure,
+            ),
+        ),
+    )
+    write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
+
+    return updated_status
+
+
+def mark_document_conversion_running(run_dir: Path) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+
+    if current_status.phases.page_rendering.state != "succeeded":
+        raise ValueError("page rendering must succeed before document conversion")
+
+    current_conversion_status = current_status.phases.document_conversion
+
+    if current_conversion_status.state != "pending":
+        raise ValueError("document conversion can only start from the pending state")
+
+    started_at = datetime.now(PORTUGAL_TIMEZONE)
+
+    updated_status = RunStatus(
+        schema_version=current_status.schema_version,
+        run_id=current_status.run_id,
+        phases=RunPhases(
+            source_preservation=current_status.phases.source_preservation,
+            page_rendering=current_status.phases.page_rendering,
+            document_conversion=PhaseStatus(state="running", started_at=started_at),
+        ),
+    )
+
+    write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
+
+    return updated_status
+
+
+def mark_document_conversion_succeeded(run_dir: Path) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+    current_conversion_status = current_status.phases.document_conversion
+
+    if current_conversion_status.state != "running":
+        raise ValueError("document conversion can only succeed from the running state")
+
+    finished_at = datetime.now(PORTUGAL_TIMEZONE)
+
+    updated_status = RunStatus(
+        schema_version=current_status.schema_version,
+        run_id=current_status.run_id,
+        phases=RunPhases(
+            source_preservation=current_status.phases.source_preservation,
+            page_rendering=current_status.phases.page_rendering,
+            document_conversion=PhaseStatus(
+                state="succeeded",
+                started_at=current_conversion_status.started_at,
+                finished_at=finished_at,
+            ),
+        ),
+    )
+    write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
+
+    return updated_status
+
+
+def mark_document_conversion_failed(run_dir: Path, failure: PhaseFailure) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+    current_conversion_status = current_status.phases.document_conversion
+
+    if current_conversion_status.state != "running":
+        raise ValueError("document conversion can only fail from the running state")
+
+    finished_at = datetime.now(PORTUGAL_TIMEZONE)
+
+    updated_status = RunStatus(
+        schema_version=current_status.schema_version,
+        run_id=current_status.run_id,
+        phases=RunPhases(
+            source_preservation=current_status.phases.source_preservation,
+            page_rendering=current_status.phases.page_rendering,
+            document_conversion=PhaseStatus(
+                state="failed",
+                started_at=current_conversion_status.started_at,
                 finished_at=finished_at,
                 error=failure,
             ),

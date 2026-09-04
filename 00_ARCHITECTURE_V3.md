@@ -1,10 +1,14 @@
-# Antenna Extraction v3 — Architectural Decision
+# Antenna Extraction v3 - Architectural Decision
 
-**Status:** architecture accepted for the new implementation; implementation not yet claimed  
-**Version:** 3.0-draft  
-**Date:** 2026-08-24  
-**Scope:** extraction of antenna architecture and reported results from one scientific paper  
-**Supersedes:** the v2 pipeline design as the intended architecture  
+**Status:** draft; Phase 2 implementation is complete on its feature branch and pending merge
+
+**Version:** 3.1-draft
+
+**Date:** 2026-09-04
+
+**Scope:** extraction of antenna architecture and reported results from one scientific paper
+
+**Supersedes:** the v2 pipeline design as the intended architecture
 
 ## 1. Role of this document
 
@@ -35,7 +39,8 @@ schema.
 The new system is a **small, sequential, evidence-first, bounded-agentic
 pipeline**:
 
-1. NuExtract3 converts the paper into a loss-preserving `DocumentPackage`.
+1. NuExtract3 converts the complete ordered page sequence into a
+   loss-preserving `DocumentPackage` through sequential batches.
 2. An architecture agent reads the complete Markdown and requests only the
    visual assets it needs.
 3. A results agent independently reads the same package and requests only the
@@ -71,9 +76,9 @@ competition between reasoning, evidence coverage, and serialization.
 
 The v3 decision separates three kinds of work:
 
-- **document preservation** — produce a faithful textual and visual package;
-- **scientific interpretation** — create focused, evidence-grounded reports;
-- **data organization** — convert those reports into stable consumer files.
+- **document preservation:** produce a faithful textual and visual package;
+- **scientific interpretation:** create focused, evidence-grounded reports;
+- **data organization:** convert those reports into stable consumer files.
 
 This separation gives each phase a narrower context, an inspectable output,
 and a failure that can be diagnosed without repeating the entire pipeline.
@@ -182,21 +187,26 @@ Scientific PDF
 Deterministic run initialization and page rendering
     |
     v
-Call 1 — NuExtract3 document conversion
+NuExtract3 document-conversion phase
+  - B = ceil(page_count / 8) sequential model calls
+  - consecutive batches of up to 8 pages
     |
     v
 DocumentPackage
   - source PDF
+  - source manifest and lifecycle status
+  - pages/pages.json
   - complete document.md
-  - manifest.json
-  - separated figures
   - ordered page images as visual fallback
+  - per-batch raw responses
+  - per-batch traces for successful parses
     |
     +------------------------------+
     |                              |
     v                              v
 Architecture agent run            Results agent run
-  reads Markdown + manifest          reads Markdown + manifest
+  reads Markdown and package        reads Markdown and package
+  metadata                          metadata
   may request exact assets           may request exact assets
   writes evidence report             writes evidence report
     |                              |
@@ -204,7 +214,7 @@ Architecture agent run            Results agent run
                     |
                     v
 Canonicalization call
-  reads both reports + manifest
+  reads both reports + identity metadata
   organizes, does not reinterpret source
                     |
                     v
@@ -219,7 +229,7 @@ baseline. A failure in one does not erase the successful artefacts of the
 other. Canonicalization starts only after both reports satisfy their phase
 gates.
 
-## 7. Phase A — deterministic run initialization
+## 7. Phase A - deterministic run initialization
 
 This phase makes the run reproducible before any model is called.
 
@@ -229,95 +239,101 @@ It is responsible for:
 - computing document and artefact hashes;
 - recording model-independent run metadata;
 - rendering every PDF page in source order;
+- rendering PNG page images at 170 DPI by default;
 - preserving one-based source page identity;
 - creating a place for phase status, traces, reports, and failures.
 
-It performs no document interpretation and no page selection. Ordered page
-renders are retained even when separated figure assets are available, because
-they provide a reliable visual fallback for compound figures, scanned papers,
-or imperfect figure extraction.
+It performs no document interpretation and no page selection. Ordered full-page
+renders are the current visual assets. They provide the visual fallback for
+compound figures, scanned papers, and content that Markdown cannot represent.
 
-## 8. Phase B — Call 1: NuExtract3 document conversion
+## 8. Phase B - NuExtract3 document conversion
 
 ### 8.1 Responsibility
 
 NuExtract3 is used as a document converter, not as the final scientific data
-extractor. Its task is to create a faithful Markdown representation and expose
-the paper's visual figures.
+extractor. Its task is to create a faithful Markdown representation from all
+rendered pages.
 
 ### 8.2 Input
 
-The complete paper is supplied using the endpoint form proven most reliable by
-the capability probe: the original PDF or the full ordered page sequence. The
-normal path does not select only allegedly relevant pages.
+The input is the complete ordered sequence declared in `pages/pages.json`.
+Consecutive batches contain at most eight PNG pages. Batches are processed
+sequentially, and every rendered page is processed exactly once in source
+order. Batching is a context-limit control. It is not relevance selection.
+
+For `page_count` pages, the number of document-conversion calls is:
+
+```text
+B = ceil(page_count / 8)
+```
 
 ### 8.3 Required output
 
-The phase produces a `DocumentPackage` whose working interface is:
+The current `DocumentPackage` is the set of run artefacts produced by Phases 1
+and 2:
 
-- `document.md` containing the complete parsed document;
-- `manifest.json` describing document identity and resolvable visual assets;
-- a collection of separated figure assets;
-- ordered page images retained as fallback assets;
-- the original source PDF and the call audit trail.
+- `manifest.json`, which records source and run identity;
+- `status.json`, which records lifecycle state;
+- `pages/pages.json`, which records ordered page identity and metadata;
+- ordered rendered page images;
+- `document_conversion/document.md`;
+- one raw response for each batch response received;
+- one trace for each successfully parsed batch response.
+
+There is no additional unified package manifest in Phase 2.
 
 ### 8.4 Markdown policy
 
 `document.md` is the canonical textual representation for the two scientific
-agents. It should preserve, in reading order:
+agents. Each batch requests preservation of:
 
 - headings and prose;
 - tables as Markdown or embedded HTML when that is the faithful form;
 - equations in a readable textual or LaTeX form;
 - figure and table captions;
-- labels, symbols, units, footnotes, and references;
-- explicit page or source anchors when the converter can provide them
-  reliably.
+- labels, symbols, units, footnotes, and references.
 
 Tables and equations remain in the Markdown. The baseline does **not** create
 table crops or equation crops. NuExtract3's representation is preferred over a
 second OCR or parsing path that could introduce disagreement.
 
+The implementation reads Markdown from `choices[0].message.content` in an
+OpenAI-compatible response envelope. It joins successful batch Markdown
+mechanically in source order with two newline characters between batches. It
+does not insert page ID markers. Page identity remains in `pages/pages.json`.
+
 ### 8.5 Figure policy
 
-Figures are exposed as assets because geometry, layer stacks, graph traces,
-dimensions, and fabrication details may require visual inspection.
-
-The package should associate each available figure with its caption, source
-page, and a stable asset identifier where possible. Full page renders remain
-addressable when a figure cannot be separated cleanly or when its surrounding
-context matters.
-
-The exact mechanism for materializing figures is an implementation decision
-for the document-package phase. It may use converter-provided figure outputs or
-a deterministic extraction step guided by the converter's references. It must
-not use a second scientific model to decide what a figure means.
+The current phase does not materialize separate figure files. Rendered
+full-page images are the available visual fallback. Separate figure
+materialization remains deferred until evidence shows that a concrete consumer
+needs it.
 
 ### 8.6 Manifest policy
 
-`manifest.json` is a routing and provenance document, not a scientific summary.
-It allows later tools to resolve declared asset identifiers safely and allows
-evidence references to be traced to the source.
+Phase 2 retains the existing source manifest and nested pages manifest. It does
+not create a new unified `DocumentPackage` manifest. The source manifest ties
+the run to the preserved PDF. The pages manifest records ordered page
+identifiers, paths, dimensions, sizes, checksums, and rendering settings.
 
-The manifest must be sufficient to answer questions such as:
-
-- which source document and run produced this package;
-- which Markdown and visual artefacts belong to it;
-- where a requested asset is located;
-- which page and caption are associated with a figure;
-- whether an artefact changed after package creation.
-
-The detailed manifest schema is intentionally deferred until Phase 2 of the
-roadmap.
+Safe asset resolution and consumer-specific package validation belong in Phase
+3, when the first concrete asset consumer is implemented. That phase should
+build on the existing manifests and add only the boundary its consumer needs.
 
 ### 8.7 Completion condition
 
-The document package is accepted only when the Markdown is readable and
-complete enough for a human inspection, every declared asset resolves, hashes
-match, captions and page identities are preserved where available, and a
-conversion failure leaves an inspectable raw response.
+The conversion succeeds only after every batch response is parsed and one
+combined `document.md` is written. For each response received, the raw response
+is written before parsing. The trace is written only after parsing succeeds.
+Conversion stops at the first failed batch, writes no final `document.md`, and
+marks the lifecycle phase as failed. A transport failure can occur before a raw
+response exists.
 
-## 9. Phase C — bounded visual-asset inspection
+The implementation has no retry, fallback, parallel batch calls, or
+configurable `max_tokens`.
+
+## 9. Phase C - bounded visual-asset inspection
 
 ### 9.1 Why a tool is used
 
@@ -325,16 +341,19 @@ Passing every page image to every agent increases context pressure and makes it
 harder to know which visual evidence influenced the answer. Passing no images
 would make geometry and graph interpretation unreliable.
 
-The compromise is to give each agent the complete Markdown and the manifest,
-then let it request specific visual assets when the text is insufficient.
+The compromise is to give each agent the complete Markdown and the package
+metadata required by its consumer, then let it request specific full-page
+assets when the text is insufficient. Separate figure assets may be added only
+if Phase 3 evidence justifies them.
 
 ### 9.2 Tool responsibility
 
 The asset tool is deterministic. It:
 
-- receives exact asset identifiers declared in the manifest;
+- receives exact page asset identifiers declared in `pages/pages.json`;
 - checks that the request is valid and within configured limits;
-- loads the corresponding figures or full pages;
+- loads the corresponding full pages, plus separate figures only if a later
+  evidence-based increment adds them;
 - returns the images with their source metadata in stable order;
 - records the request, selected assets, and hashes.
 
@@ -359,7 +378,8 @@ by implementation code.
 This design has one **logical agent run** for architecture and one for results.
 However, a tool-based run normally contains two model inference turns:
 
-1. the model reads `document.md` and `manifest.json` and emits a tool request;
+1. the model reads `document.md` and the accepted package metadata, then emits
+   a tool request;
 2. deterministic code executes the tool and returns the images;
 3. the same model is invoked again with the tool result and emits the report.
 
@@ -373,14 +393,15 @@ would add another reasoning boundary and another model call. The selected
 architecture or results model should itself be able to receive the returned
 images.
 
-## 10. Phase D — architecture agent
+## 10. Phase D - architecture agent
 
 ### 10.1 Initial input
 
 The agent initially receives only:
 
 - the complete `document.md`;
-- `manifest.json`;
+- the source and pages manifests, or the consumer-specific package view defined
+  in Phase 3;
 - a focused architecture role and reporting template;
 - access to the bounded asset-inspection tool.
 
@@ -426,14 +447,14 @@ Evidence may refer to:
 
 - a Markdown section and a short source-faithful excerpt;
 - a table or equation label represented in the Markdown;
-- a figure or full-page asset identifier from the manifest;
+- a full-page asset identifier from `pages/pages.json`;
 - a caption and source page;
 - multiple sources when a claim depends on their combination.
 
 The exact evidence syntax is defined and tested during the architecture-agent
-phase. It must remain resolvable against an immutable document package.
+phase. It must remain resolvable against the accepted package artefacts.
 
-## 11. Phase E — results agent
+## 11. Phase E - results agent
 
 ### 11.1 Initial input
 
@@ -441,7 +462,8 @@ The results agent receives the same initial source interface as the
 architecture agent:
 
 - the complete `document.md`;
-- `manifest.json`;
+- the source and pages manifests, or the consumer-specific package view defined
+  in Phase 3;
 - a focused results role and reporting template;
 - access to the bounded asset-inspection tool.
 
@@ -473,7 +495,7 @@ without being forced into the final strict JSON. Every reported result must be
 associated with evidence and with its design or setup when the paper supports
 that association.
 
-## 12. Phase F — canonicalization call
+## 12. Phase F - canonicalization call
 
 ### 12.1 Purpose
 
@@ -486,7 +508,7 @@ The canonicalizer receives:
 
 - `architecture_evidence_report.md`;
 - `results_evidence_report.md`;
-- `manifest.json` for document identity and reference validation;
+- package identity and reference metadata defined by the consuming phases;
 - a simple, flexible output contract.
 
 It does not receive the source PDF, page images, figure assets, or the complete
@@ -588,39 +610,43 @@ a production scientific role without evaluation.
 The word “call” must be recorded precisely. The system distinguishes logical
 phase execution, model inference calls, and deterministic tool executions.
 
+For a paper with `page_count` rendered pages, define:
+
+```text
+B = ceil(page_count / 8)
+```
+
 | Logical phase | Normal model calls | Deterministic tool executions |
 | --- | ---: | ---: |
-| NuExtract3 document conversion | 1 | 0 |
+| NuExtract3 document conversion | B | 0 |
 | Architecture agent run | 1 if no image; 2 if assets are requested | 0 or 1 |
 | Results agent run | 1 if no image; 2 if assets are requested | 0 or 1 |
 | Canonicalization | 1 | 0 |
-| **Normal total** | **4–6** | **0–2** |
+| **Normal total** | **B + 3 to B + 5** | **0 to 2** |
 
 This is four logical model-driven phases, not a promise of exactly four HTTP
-requests. Every run records the observed number of model calls and tool
-executions.
+requests. The later full-pipeline estimates are `B + 3` when neither
+scientific agent uses visual assets, `B + 4` when one agent uses visual assets,
+and `B + 5` when both use visual assets. Every run records the observed number
+of model calls and tool executions.
 
 No reviewer, repair, retry, fallback, or hidden visual-model call is included
 in this budget.
 
 ## 15. Evidence, provenance, and auditability
 
-Every model-driven phase preserves enough information to reproduce and inspect
-its boundary:
+The implemented Phase 2 trace records the requested model, temperature, mode,
+thinking setting, HTTP status, `finish_reason`, usage when available, and model
+latency. The raw response is a separate artefact and is persisted first. Phase
+2 does not yet record prompt versions or input hashes in the per-batch trace.
 
-- exact model role and deployed identifier;
-- input artefact hashes;
-- prompt and reporting-template version;
-- model settings that affect behaviour;
-- requested and returned asset identifiers;
-- raw model response before parsing;
-- finish reason, usage, and latency when provided;
-- parsing and validation outcomes;
-- redacted failure details.
+Later model-driven phases should preserve enough information to reproduce and
+inspect their own boundaries. The exact trace fields should be added with each
+concrete consumer rather than claimed in advance.
 
-The document package is immutable after acceptance. If conversion changes, a
-new package identity is produced rather than mutating evidence underneath a
-report.
+Phase 2 refuses to overwrite existing conversion outputs. A later acceptance
+boundary may define a package identity or immutability rule when a concrete
+consumer requires it.
 
 Evidence references must remain source-faithful. Normalizing a unit or name in
 the final JSON must not erase the exact wording or value reported by the paper.
@@ -631,6 +657,9 @@ The baseline has no automatic retries.
 
 - If run initialization or document conversion fails, both scientific agents
   and canonicalization are skipped.
+- Document conversion stops at the first failed batch. It preserves raw
+  responses already received and traces for successfully parsed batches, but
+  it does not write the final `document.md`.
 - If the architecture agent fails, its failure is preserved and the independent
   results agent may still run sequentially.
 - If the results agent fails, a successful architecture report remains valid.
@@ -647,11 +676,15 @@ resume cache are not part of the first baseline.
 The default is to send the complete `document.md` to each scientific agent. No
 RAG, top-k selection, or relevance classifier precedes the agents.
 
-If the real endpoint rejects a representative complete document because of a
-measured context or payload limit, the run should fail clearly during the
-initial baseline. A source-ordered batching or context-compaction amendment may
-then be designed and benchmarked. It must not be introduced speculatively or
-silently replace complete-document processing.
+Measured runs showed that one request per document can reach the endpoint
+context limit on larger papers. Reducing the default rendering resolution from
+200 DPI to 170 DPI helped but did not solve every case. Fixed, source-ordered
+batches of up to eight pages completed larger papers that had previously ended
+with `finish_reason="length"`.
+
+Batching changes the request boundary, not the document scope. Every page is
+still converted exactly once, in order, and no relevance classifier or page
+selector precedes conversion.
 
 ## 18. Development phases and chat boundaries
 
@@ -661,15 +694,15 @@ only one commit is implemented and reviewed at a time.
 
 | Phase | Suggested chat | Architectural outcome |
 | --- | --- | --- |
-| 0 | `00 — Foundation and project rules` | Clean repository, authority rules, and executable development baseline |
-| 1 | `01 — Run lifecycle and source preservation` | Deterministic run, PDF identity, ordered page renders, and failures |
-| 2 | `02 — NuExtract3 DocumentPackage` | Complete Markdown, manifest, figures, and visual page fallback |
-| 3 | `03 — Bounded asset inspection` | Safe deterministic tool and one-round agent controller |
-| 4 | `04 — Architecture agent` | Evidence-grounded architecture Markdown report |
-| 5 | `05 — Results agent` | Evidence-grounded results Markdown report |
-| 6 | `06 — Canonicalization and final contracts` | Shallow combined response, claim accounting, and two JSON outputs |
-| 7 | `07 — End-to-end runner` | One sequential command with clear phase and failure behaviour |
-| 8 | `08 — Scientific benchmark and baseline` | Measured model decisions, regression evidence, documentation, and release tag |
+| 0 | `00 - Foundation and project rules` | Clean repository, authority rules, and executable development baseline |
+| 1 | `01 - Run lifecycle and source preservation` | Deterministic run, PDF identity, ordered page renders, and failures |
+| 2 | `02 - NuExtract3 DocumentPackage` | Ordered page renders, combined Markdown, per-batch diagnostics, and lifecycle state |
+| 3 | `03 - Bounded asset inspection` | Consumer-specific package validation, safe asset resolution, and one-round agent control |
+| 4 | `04 - Architecture agent` | Evidence-grounded architecture Markdown report |
+| 5 | `05 - Results agent` | Evidence-grounded results Markdown report |
+| 6 | `06 - Canonicalization and final contracts` | Shallow combined response, claim accounting, and two JSON outputs |
+| 7 | `07 - End-to-end runner` | One sequential command with clear phase and failure behaviour |
+| 8 | `08 - Scientific benchmark and baseline` | Measured model decisions, regression evidence, documentation, and release tag |
 
 The detailed branches, commits, tests, and exit gates are defined in
 `01_IMPLEMENTATION_ROADMAP_V3.md`.
@@ -682,12 +715,21 @@ without new empirical evidence:
 - create a new clean repository for v3 and retain v2 as an archive/baseline;
 - process one paper per run;
 - keep execution sequential;
-- use NuExtract3 to produce a loss-preserving Markdown document package;
+- render every page as PNG at 170 DPI by default;
+- divide the complete ordered page sequence into consecutive batches of up to
+  eight pages;
+- make `B = ceil(page_count / 8)` sequential NuExtract3 calls;
+- join successful batch Markdown mechanically with two newline characters;
 - keep tables and equations in `document.md`;
 - do not create table or equation crops;
-- expose separated figures and ordered pages through `manifest.json`;
-- initially pass only `document.md` and `manifest.json` to each scientific
-  agent;
+- use rendered full-page images as the current visual fallback;
+- maintain page identity in `pages/pages.json`, not model-generated Markdown
+  markers;
+- persist each received raw response before parsing and write a trace only
+  after a successful parse;
+- write final Markdown only after all batches succeed;
+- initially pass `document.md` and the required package metadata to each
+  scientific agent;
 - let each agent request exact visual assets through a deterministic tool;
 - allow at most one asset-tool round per scientific agent in the baseline;
 - use the same scientific model to interpret returned images;
@@ -704,9 +746,10 @@ without new empirical evidence:
 The following are decided in their named phase, from tests and benchmark
 evidence:
 
-- whether NuExtract3 performs best with a PDF or ordered page images;
-- how converter figure references are materialized into separate files;
-- the minimal manifest representation needed for reliable routing;
+- whether separate figure materialization provides enough value for a concrete
+  consumer;
+- the consumer-specific validation boundary for package artefacts;
+- the minimal package view needed for safe asset routing;
 - the endpoint's tool-call and image-result protocol;
 - visual asset count and payload limits;
 - the exact Markdown report templates and claim-reference notation;
@@ -724,13 +767,13 @@ is chosen when the relevant phase begins.
 
 An implementation conforms to v3 only if all of the following remain true:
 
-1. The accepted document package preserves the complete textual source and
-   resolvable visual evidence.
+1. Document conversion processes every rendered page exactly once and in
+   source order.
 2. Tables and equations are not routed through a second crop/OCR path.
 3. Architecture and results agents initially see the complete Markdown and
-   manifest.
+   the package metadata required by their accepted consumer boundary.
 4. Visual asset selection is performed by the requesting agent using exact
-   manifest identifiers.
+   page asset identifiers.
 5. The asset tool is deterministic and does not hide another model call.
 6. Each scientific agent has at most one tool round in the baseline.
 7. Scientific reports precede final JSON serialization.
@@ -738,8 +781,9 @@ An implementation conforms to v3 only if all of the following remain true:
    source paper.
 9. Every report claim has an auditable disposition.
 10. Deterministic code never repairs scientific meaning.
-11. The runner is sequential and reports actual model-call counts.
-12. Failure preserves completed artefacts and raw responses.
+11. The runner is sequential and reports actual model-call counts using `B`.
+12. Conversion failure preserves completed diagnostics and writes no final
+    Markdown.
 13. No missing value is silently replaced with an engineering default.
 14. No future phase is represented by placeholder code.
 
@@ -748,7 +792,7 @@ An implementation conforms to v3 only if all of the following remain true:
 The v3 baseline is architecturally successful when a representative paper can
 be processed into:
 
-- a human-reviewable, loss-preserving `DocumentPackage`;
+- a human-reviewable `DocumentPackage` made from the existing run artefacts;
 - an architecture report whose claims resolve to text or requested visual
   evidence;
 - a results report that preserves variants, setups, and result origins;

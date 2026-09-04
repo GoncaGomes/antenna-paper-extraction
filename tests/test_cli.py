@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -199,7 +200,7 @@ def test_render_pages_does_not_hide_unexpected_failure(
         *,
         dpi: int,
     ) -> SimpleNamespace:
-        assert dpi == 200
+        assert dpi == 170
         raise RuntimeError("simulated programming error")
 
     monkeypatch.setattr(
@@ -213,3 +214,263 @@ def test_render_pages_does_not_hide_unexpected_failure(
         match="simulated programming error",
     ):
         cli.main(["render-pages", str(run_dir)])
+
+
+def _document_extractor_environment() -> dict[str, str]:
+    return {
+        "SKYNET_BASE_URL": "https://skynet.example.test/v1",
+        "SKYNET_API_KEY": "test-api-key",
+        "DOCUMENT_EXTRACTOR_MODEL": "nuextract3",
+        "DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS": "600",
+    }
+
+
+@pytest.mark.parametrize(
+    "missing_name",
+    [
+        "SKYNET_BASE_URL",
+        "SKYNET_API_KEY",
+        "DOCUMENT_EXTRACTOR_MODEL",
+        "DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS",
+    ],
+)
+def test_load_document_extractor_settings_rejects_missing_variable(
+    missing_name: str,
+) -> None:
+    environ = _document_extractor_environment()
+    del environ[missing_name]
+
+    with pytest.raises(
+        ValueError,
+        match=rf"Missing required environment variable: {missing_name}",
+    ):
+        cli.load_document_extractor_settings(environ)
+
+
+@pytest.mark.parametrize(
+    "timeout_value",
+    [
+        "banana",
+        "0",
+        "-1",
+    ],
+)
+def test_load_document_extractor_settings_rejects_invalid_timeout(
+    timeout_value: str,
+) -> None:
+    environ = _document_extractor_environment()
+    environ["DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS"] = timeout_value
+
+    with pytest.raises(
+        ValueError,
+        match="DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS must be a positive number",
+    ):
+        cli.load_document_extractor_settings(environ)
+
+
+def test_convert_document_help_uses_public_cli_names(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exception:
+        cli.main(["convert-document", "--help"])
+
+    assert exception.value.code == 0
+
+    captured = capsys.readouterr()
+
+    assert "convert-document" in captured.out
+    assert "run_dir" in captured.out
+
+
+def test_convert_document_loads_dotenv_and_calls_conversion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SKYNET_BASE_URL=https://dotenv.example.test/v1\n"
+        "SKYNET_API_KEY=dotenv-test-key\n"
+        "DOCUMENT_EXTRACTOR_MODEL=nuextract3-from-dotenv\n"
+        "DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS=600\n",
+        encoding="utf-8",
+    )
+
+    for name in _document_extractor_environment():
+        monkeypatch.delenv(name, raising=False)
+
+    monkeypatch.setenv(
+        "DOCUMENT_EXTRACTOR_MODEL",
+        "nuextract3-from-system",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    sdk_client = object()
+    openai_constructor = Mock(return_value=sdk_client)
+    monkeypatch.setattr(cli, "OpenAI", openai_constructor)
+
+    run_dir = tmp_path / "runs" / "run_test"
+    document_path = run_dir / "document.md"
+
+    conversion = Mock(return_value=document_path)
+    monkeypatch.setattr(
+        cli,
+        "convert_document_to_markdown",
+        conversion,
+    )
+
+    exit_code = cli.main(
+        [
+            "convert-document",
+            str(run_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    openai_constructor.assert_called_once_with(
+        base_url="https://dotenv.example.test/v1",
+        api_key="dotenv-test-key",
+        timeout=600.0,
+        max_retries=0,
+    )
+
+    conversion.assert_called_once()
+
+    conversion_arguments = conversion.call_args.kwargs
+
+    assert conversion_arguments["run_dir"] == run_dir
+    assert conversion_arguments["model"] == "nuextract3-from-system"
+
+    wrapped_client = conversion_arguments["client"]
+
+    assert isinstance(
+        wrapped_client,
+        cli.OpenAICompatibleClient,
+    )
+    assert wrapped_client.sdk_client is sdk_client
+
+    captured = capsys.readouterr()
+
+    assert captured.out == (f"Converted document: {document_path.resolve()}\n")
+    assert captured.err == ""
+    assert "dotenv-test-key" not in captured.out
+
+
+def test_convert_document_reports_missing_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    for name in _document_extractor_environment():
+        monkeypatch.delenv(name, raising=False)
+
+    openai_constructor = Mock()
+    monkeypatch.setattr(cli, "OpenAI", openai_constructor)
+
+    exit_code = cli.main(
+        [
+            "convert-document",
+            str(tmp_path / "run_test"),
+        ]
+    )
+
+    assert exit_code == 1
+
+    openai_constructor.assert_not_called()
+
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == (
+        "Failed to convert document. "
+        "Missing required environment variable: SKYNET_BASE_URL\n"
+    )
+
+
+def test_convert_document_reports_expected_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    for name, value in _document_extractor_environment().items():
+        monkeypatch.setenv(name, value)
+
+    sdk_client = object()
+    monkeypatch.setattr(
+        cli,
+        "OpenAI",
+        Mock(return_value=sdk_client),
+    )
+
+    conversion = Mock(side_effect=ValueError("simulated conversion failure"))
+    monkeypatch.setattr(
+        cli,
+        "convert_document_to_markdown",
+        conversion,
+    )
+
+    exit_code = cli.main(
+        [
+            "convert-document",
+            str(tmp_path / "run_test"),
+        ]
+    )
+
+    assert exit_code == 1
+    assert conversion.call_count == 1
+
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == (
+        "Failed to convert document. simulated conversion failure\n"
+    )
+
+
+def test_convert_document_does_not_hide_unexpected_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    for name, value in _document_extractor_environment().items():
+        monkeypatch.setenv(name, value)
+
+    sdk_client = object()
+    monkeypatch.setattr(
+        cli,
+        "OpenAI",
+        Mock(return_value=sdk_client),
+    )
+
+    conversion = Mock(side_effect=RuntimeError("unexpected conversion failure"))
+    monkeypatch.setattr(
+        cli,
+        "convert_document_to_markdown",
+        conversion,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unexpected conversion failure",
+    ):
+        cli.main(
+            [
+                "convert-document",
+                str(tmp_path / "run_test"),
+            ]
+        )
+
+
+def _document_extractor_environment() -> dict[str, str]:
+    return {
+        "SKYNET_BASE_URL": "https://skynet.example.test/v1",
+        "SKYNET_API_KEY": "test-api-key",
+        "DOCUMENT_EXTRACTOR_MODEL": "nuextract3",
+        "DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS": "600",
+    }

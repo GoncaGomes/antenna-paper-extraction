@@ -1,10 +1,10 @@
-# Antenna Extraction v3 — Implementation Roadmap
+# Antenna Extraction v3 - Implementation Roadmap
 
 - **Status:** active execution plan
-- **Version:** 3.0-draft
-- **Date:** 2026-08-24
+- **Version:** 3.1-draft
+- **Date:** 2026-09-04
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
-- **Current implementation phase:** Phase 2 preparation
+- **Current implementation phase:** Phase 2 - NuExtract3 DocumentPackage
 
 ## 1. Purpose
 
@@ -119,15 +119,15 @@ working vertical slices.
 
 | Phase | Chat title | Suggested branch | Result merged to `main` |
 | ---: | --- | --- | --- |
-| 0 | `00 — Foundation and project rules` | `chore/foundation` | Clean, governed development baseline |
-| 1 | `01 — Run lifecycle and source preservation` | `feat/run-lifecycle` | Deterministic run and ordered page artefacts |
-| 2 | `02 — NuExtract3 DocumentPackage` | `feat/document-package` | Complete Markdown, manifest, figures, and pages |
-| 3 | `03 — Bounded asset inspection` | `feat/asset-inspection` | Safe asset tool and one-round interaction control |
-| 4 | `04 — Architecture agent` | `feat/architecture-agent` | `architecture_evidence_report.md` |
-| 5 | `05 — Results agent` | `feat/results-agent` | `results_evidence_report.md` |
-| 6 | `06 — Canonicalization and final contracts` | `feat/canonicalization` | Two validated final JSON documents |
-| 7 | `07 — End-to-end runner` | `feat/end-to-end` | One sequential end-to-end command |
-| 8 | `08 — Scientific benchmark and baseline` | `test/scientific-benchmark` | Measured baseline and release tag recommendation |
+| 0 | `00 - Foundation and project rules` | `chore/foundation` | Clean, governed development baseline |
+| 1 | `01 - Run lifecycle and source preservation` | `feat/run-lifecycle` | Deterministic run and ordered page artefacts |
+| 2 | `02 - NuExtract3 DocumentPackage` | `feat/document-package` | Combined Markdown, ordered page assets, and per-batch diagnostics |
+| 3 | `03 - Bounded asset inspection` | `feat/asset-inspection` | Consumer-specific package validation, safe asset resolution, and one-round interaction control |
+| 4 | `04 - Architecture agent` | `feat/architecture-agent` | `architecture_evidence_report.md` |
+| 5 | `05 - Results agent` | `feat/results-agent` | `results_evidence_report.md` |
+| 6 | `06 - Canonicalization and final contracts` | `feat/canonicalization` | Two validated final JSON documents |
+| 7 | `07 - End-to-end runner` | `feat/end-to-end` | One sequential end-to-end command |
+| 8 | `08 - Scientific benchmark and baseline` | `test/scientific-benchmark` | Measured baseline and release tag recommendation |
 
 One phase is one principal discussion boundary. If a phase proves too large,
 split the implementation work into commits inside the same chat before
@@ -213,7 +213,7 @@ These constraints apply to all phases:
 - tests use fake clients by default and never contact the institutional server
   unless an opt-in command is deliberately run.
 
-## 8. Phase 0 — foundation and project rules
+## 8. Phase 0 - foundation and project rules
 
 - **Chat:** `00 - Foundation and project rules`
 - **Branch:** `chore/foundation`
@@ -238,7 +238,7 @@ tooling, and no inherited pipeline implementation.
 
 Do not discuss architecture schema fields or model prompts in this chat.
 
-### 8.3 Candidate commit 0A — adopt the source of truth
+### 8.3 Candidate commit 0A - adopt the source of truth
 
 Suggested message:
 
@@ -263,7 +263,7 @@ Verification:
 - the README says “not implemented” where appropriate;
 - there is no copied v2 code.
 
-### 8.4 Candidate commit 0B — establish real development tooling
+### 8.4 Candidate commit 0B - establish real development tooling
 
 Suggested message:
 
@@ -307,9 +307,9 @@ The user should be able to explain how the repository is governed, how a phase
 branch becomes stable `main`, and why no code was copied before a concrete
 consumer existed.
 
-## 9. Phase 1 — run lifecycle and source preservation
+## 9. Phase 1 - run lifecycle and source preservation
 
-- **Chat:** `01 — Run lifecycle and source preservation`
+- **Chat:** `01 - Run lifecycle and source preservation`
 - **Branch:** `feat/run-lifecycle-completion`
 - **Model calls:** none
 - **Status:** completed
@@ -334,7 +334,7 @@ failures. This is the deterministic base used by every later phase.
 Prefer the smallest convention that can be tested. Do not recreate a workflow
 engine.
 
-### 9.3 Candidate commit 1A — preserve run input and identity
+### 9.3 Candidate commit 1A - preserve run input and identity
 
 Suggested message:
 
@@ -361,7 +361,7 @@ Tests:
 - paths with spaces are handled;
 - metadata writes are deterministic except for declared time and run identity.
 
-### 9.4 Candidate commit 1B — render pages in source order
+### 9.4 Candidate commit 1B - render pages in source order
 
 Suggested message:
 
@@ -386,7 +386,7 @@ Tests:
 - failure does not mark rendering complete;
 - rendered artefacts match their metadata.
 
-### 9.5 Candidate commit 1C — make failures inspectable
+### 9.5 Candidate commit 1C - make failures inspectable
 
 Suggested message:
 
@@ -431,194 +431,158 @@ The user should understand the run lifecycle, why artefact identity precedes
 model work, how atomic persistence is tested, and how phase state differs from
 a workflow engine.
 
-## 10. Phase 2 — NuExtract3 DocumentPackage
+## 10. Phase 2 - NuExtract3 DocumentPackage
 
-- **Chat:** `02 — NuExtract3 DocumentPackage`
+- **Chat:** `02 - NuExtract3 DocumentPackage`
 - **Branch:** `feat/document-package`
-- **Normal model calls:** one
-- **Status:** next phase, not started
+- **Normal model calls:** `B = ceil(page_count / 8)`
+- **Status:** implementation complete, pending merge
 
 ### 10.1 Objective
 
-Convert the complete paper into an immutable, human-reviewable package whose
-scientific-agent interface is `document.md` plus `manifest.json`, with figures
-and ordered pages available by reference.
+Convert every rendered page into one human-reviewable `document.md`. Preserve
+the run artefacts, page identity, lifecycle state, and per-batch diagnostics
+needed for inspection. Phase 2 does not perform scientific extraction.
 
-### 10.2 Fixed decisions for this phase
+### 10.2 Implemented capability findings
 
-- NuExtract3 is a document converter, not the architecture/results extractor.
-- the whole paper is converted in the normal path;
-- tables and equations remain in `document.md`;
-- table and equation crops are not produced;
-- captions and figure references are preserved;
-- page renders from Phase 1 remain available;
-- raw model responses are persisted before parsing;
-- manifest contents are routing/provenance facts, not a scientific summary.
+- The endpoint accepts ordered PNG page images.
+- It returns an OpenAI-compatible response envelope.
+- Markdown is read from `choices[0].message.content`.
+- `finish_reason` and token usage are available in the response.
+- One request per document can reach the endpoint context limit on larger
+  papers.
+- Reducing the rendering default from 200 DPI to 170 DPI helped but did not
+  solve every larger-paper failure.
+- Fixed consecutive batches contain at most eight pages.
+- Batches run sequentially and cover the complete page sequence exactly once.
+- Batch conversion completed larger papers that had previously ended with
+  `finish_reason="length"`.
+- Model-generated page ID markers are not reliable enough to use.
+- The implementation does not produce separate figure binaries.
 
-### 10.3 Questions to resolve with a capability probe
+These findings describe observed behaviour. The repository does not record
+timings, token counts, quality scores, or formal content-quality acceptance for
+the manual runs.
 
-- whether the deployed NuExtract3 endpoint accepts the PDF directly, ordered
-  page images, or both;
-- the most faithful supported input route;
-- whether it returns Markdown directly or inside a structured envelope;
-- how it denotes page boundaries, figures, captions, tables, and equations;
-- whether it produces figure binaries, stable references, or only Markdown
-  image markers;
-- maximum observed page, payload, context, and timeout limits;
-- whether the endpoint supports a reliable raw text response without a large
-  strict schema;
-- how usage and finish reasons are returned.
+### 10.3 Implemented work
 
-The probe is opt-in and sequential. The user runs it against the institutional
-server and saves redacted observations. Do not make production code depend on
-an unrecorded manual assumption.
+The completed Phase 2 increment includes:
 
-### 10.4 Candidate commit 2A — add the minimal traced model client
+- PNG page rendering at 170 DPI by default;
+- `pages/pages.json` with ordered page metadata and checksums;
+- endpoint settings loaded from the environment and an optional local `.env`;
+- `SKYNET_BASE_URL`, `SKYNET_API_KEY`, `DOCUMENT_EXTRACTOR_MODEL`, and
+  `DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS` validation;
+- a minimal OpenAI-compatible raw-response client with SDK retries disabled;
+- validation of run identity, pages identity, and lifecycle prerequisites;
+- one logical document-conversion phase with `B` sequential calls;
+- consecutive batches of up to eight pages with no relevance filtering;
+- raw response persistence before Markdown parsing;
+- traces written only for successfully parsed batch responses;
+- mechanical Markdown assembly with two newline characters between batches;
+- final `document.md` persistence only after every batch succeeds;
+- lifecycle transition to `failed` at the first failed batch;
+- CLI exposure through `convert-document`;
+- fake-client tests for request construction, response parsing, batching,
+  lifecycle behaviour, diagnostics, failures, and overwrite protection;
+- manual conversion of representative larger papers.
 
-Suggested message:
+The implementation has no retries, fallback models, parallel batch calls, or
+configurable `max_tokens`.
 
-```text
-feat(models): add a traced OpenAI-compatible client
-```
+### 10.4 Phase 2 artefact contract
 
-Behaviour:
-
-- support only the request forms required by the observed endpoint;
-- inject the client in tests;
-- record model identifier, timing, settings, finish metadata, and raw response;
-- omit secrets and complete base64 payloads from logs;
-- distinguish transport failure, incomplete response, and parse failure;
-- make no retry or fallback attempt.
-
-Tests use a fake client and cover success, timeout, malformed response, secret
-redaction, and raw-response persistence.
-
-### 10.5 Candidate commit 2B — convert the complete document to Markdown
-
-Suggested message:
+The current `DocumentPackage` is the set of existing run artefacts:
 
 ```text
-feat(document): convert complete papers with NuExtract3
+run_<id>/
+├── manifest.json
+├── status.json
+├── input/
+│   └── <source>.pdf
+├── pages/
+│   ├── pages.json
+│   ├── page_0001.png
+│   └── ...
+└── document_conversion/
+    ├── document.md
+    ├── nuextract3_raw_response_batch_*.json
+    └── nuextract3_trace_batch_*.json
 ```
 
-Behaviour:
+`manifest.json` is the source and run manifest. `status.json` records lifecycle
+state. `pages/pages.json` maintains page identity and source order. Phase 2 does
+not create a second unified package manifest.
 
-- send the full paper using the proven endpoint route;
-- request a faithful reading-order Markdown conversion;
-- preserve headings, prose, tables, equations, captions, labels, symbols,
-  units, and references;
-- write the raw response before extracting `document.md`;
-- record prompt and input hashes;
-- make one normal NuExtract3 call.
+For each endpoint response received, the raw response is written before
+parsing. A trace is written only after that response parses successfully. A
+transport failure may leave no raw response because the endpoint returned
+nothing. Conversion stops at the first failure and does not write
+`document.md`. Outputs from earlier successful batches remain available.
 
-Local tests:
+### 10.5 Deliberately deferred scope
 
-- complete ordered input is sent once;
-- fake Markdown with tables, equations, captions, and page markers survives
-  unchanged except for explicitly documented normalization;
-- malformed or empty response leaves a diagnosis;
-- no table/equation crop path is invoked;
-- a forced rerun policy is explicit and does not silently overwrite evidence.
+Separate figure materialization, a new unified package manifest, and a
+dedicated immutable-package validator are not part of the Phase 2 completion
+gate. Rendered full-page images and the existing manifests are sufficient for
+the next implementation phase.
 
-### 10.6 Candidate commit 2C — materialize figures and the manifest
+Phase 3 should introduce safe asset resolution and consumer-specific package
+validation when its concrete consumer is defined. Separate figures should be
+added only if evidence shows that full-page assets are insufficient.
 
-Suggested message:
+### 10.6 Human and remote evidence
 
-```text
-feat(document): build the visual document manifest
-```
+Manual work established the endpoint route, response envelope, context-limit
+failure mode, and the larger-paper batching result listed above. Batch
+boundaries and combined Markdown still require manual review. No formal
+content-quality gate or score is recorded.
 
-Behaviour:
+The source papers used for model capability work must be legally usable in the
+development environment. Institutional credentials must not enter the
+repository or documentation.
 
-- create stable identifiers for available figures and full-page fallbacks;
-- associate figures with captions and source pages where reliably available;
-- resolve converter-provided figure outputs or use the smallest deterministic
-  materialization step justified by the probe;
-- record paths, media information, and hashes needed for safe later loading;
-- keep source PDF, Markdown, figures, and page renders tied to one package
-  identity;
-- never interpret the scientific meaning of a figure.
+### 10.7 Phase 2 completion gate
 
-Tests:
-
-- every manifest asset resolves inside the run;
-- unknown or duplicated identifiers fail validation;
-- path traversal is impossible;
-- captions and page links are retained;
-- compound or unseparated figures can fall back to a full-page asset;
-- no table or equation assets appear;
-- changing an artefact invalidates the package hash or validation.
-
-### 10.7 Candidate commit 2D — validate the DocumentPackage
-
-Suggested message:
-
-```text
-feat(document): validate immutable document packages
-```
-
-Behaviour:
-
-- check the source, Markdown, manifest, figures, pages, and hashes as one
-  package;
-- report missing, stale, or unresolvable artefacts;
-- mark the package accepted only after validation;
-- prevent later phases from consuming an unaccepted package;
-- avoid introducing a detailed scientific schema.
-
-Tests cover valid, missing-asset, altered-Markdown, altered-image, bad-page,
-duplicate-identifier, and partial-call cases.
-
-### 10.8 Human and remote acceptance
-
-On a small representative set, inspect:
-
-- reading order;
-- table row and column fidelity;
-- equations, symbols, and subscripts;
-- figure and table captions;
-- figure separation and full-page fallback;
-- page/source traceability;
-- absence of omitted sections;
-- actual call count and latency.
-
-The source paper used for model capability work must be legally usable in the
-development environment. Raw institutional credentials never enter the repo.
-
-### 10.9 Phase 2 completion gate
-
-- one normal NuExtract3 call produces an accepted package;
-- `document.md` is complete enough for human review;
-- tables and equations are preserved in Markdown without crops;
-- figures and pages are addressable through the manifest;
-- every artefact and raw response is traceable;
+- all rendered pages are processed once and in source order;
+- one combined `document.md` is produced after all batches succeed;
+- raw response files exist for batch responses received from the endpoint;
+- trace files exist for successfully parsed batches;
+- no final Markdown exists when any batch fails;
+- conversion stops at the first failed batch;
 - no architecture or results interpretation occurs;
-- no measured endpoint limitation is hidden;
-- local tests, lint, and representative remote inspection pass;
-- the branch is merged and deleted.
+- automated tests and lint pass;
+- representative larger papers complete through manual batch conversion;
+- the repository owner reviews and merges the feature branch.
 
-### 10.10 Learning outcome
+Formal content-quality acceptance is deferred until reproducible scientific
+assertions exist.
 
-The user should understand the observed NuExtract3 protocol, the difference
-between document conversion and scientific extraction, why the manifest is not
-a domain schema, and how package immutability protects later evidence.
+### 10.8 Learning outcome
 
-## 11. Phase 3 — bounded asset inspection
+The user should understand the observed NuExtract3 protocol, why the context
+limit required source-ordered batching, how diagnostic artefact timing supports
+failure analysis, and why page images plus existing manifests are the current
+package boundary.
 
-- **Chat:** `03 — Bounded asset inspection`
+## 11. Phase 3 - bounded asset inspection
+
+- **Chat:** `03 - Bounded asset inspection`
 - **Branch:** `feat/asset-inspection`
 - **Model calls:** none in deterministic tool tests; up to two in an integration agent run
 - **Status:** not started
 
 ### 11.1 Objective
 
-Implement the controlled mechanism by which a scientific agent can request
-exact figures or pages declared in the manifest and receive them in a second
-model turn.
+Define the consumer-specific package validation boundary and implement the
+controlled mechanism by which a scientific agent can request exact full-page
+assets declared in `pages/pages.json` and receive them in a second model turn.
 
 ### 11.2 Fixed decisions for this phase
 
-- agents initially receive only `document.md` and `manifest.json`;
+- agents initially receive `document.md` and the minimum accepted package
+  metadata defined in this phase;
 - the requesting agent chooses exact asset identifiers;
 - the tool is deterministic and contains no model;
 - returned images are interpreted by the same scientific model;
@@ -632,9 +596,10 @@ model turn.
 - maximum assets and payload per one round based on the endpoint probe;
 - how the endpoint represents image tool results;
 - how invalid, oversized, or duplicate requests are reported;
-- whether figure and full-page assets use one namespace or typed identifiers.
+- whether evidence justifies separate figure assets in addition to the current
+  full-page assets.
 
-### 11.4 Candidate commit 3A — resolve declared assets safely
+### 11.4 Candidate commit 3A - validate and resolve package assets safely
 
 Suggested message:
 
@@ -644,7 +609,8 @@ feat(tools): resolve manifest-backed visual assets
 
 Behaviour:
 
-- load only an accepted document package;
+- define and validate the package boundary required by this consumer;
+- load only package artefacts that satisfy that boundary;
 - accept exact declared identifiers;
 - enforce count and payload limits;
 - preserve requested order or apply one documented stable ordering rule;
@@ -654,7 +620,7 @@ Behaviour:
 
 Tests:
 
-- figure and full-page resolution;
+- full-page resolution;
 - unknown and duplicate identifiers;
 - path traversal attempts;
 - payload and count limits;
@@ -662,7 +628,11 @@ Tests:
 - altered asset hash;
 - no file access outside the package.
 
-### 11.5 Candidate commit 3B — enforce one tool round
+Do not add separate figure files or a broader package schema unless a concrete
+Phase 3 case demonstrates that the existing page assets and manifests are
+insufficient.
+
+### 11.5 Candidate commit 3B - enforce one tool round
 
 Suggested message:
 
@@ -672,7 +642,8 @@ feat(agents): add a bounded visual tool interaction
 
 Behaviour:
 
-- invoke the model with Markdown, manifest, role prompt, and tool definition;
+- invoke the model with Markdown, accepted package metadata, role prompt, and
+  tool definition;
 - accept either a final report or one valid asset request;
 - execute the deterministic asset tool;
 - invoke the same model again with the returned images;
@@ -692,7 +663,7 @@ Tests with a scripted fake model:
 - exactly zero or one deterministic tool execution;
 - all raw responses and tool traces survive failure.
 
-### 11.6 Candidate commit 3C — verify the real multimodal protocol
+### 11.6 Candidate commit 3C - verify the real multimodal protocol
 
 Suggested message:
 
@@ -731,9 +702,9 @@ The user should be able to trace the complete conversation from first model
 turn, through deterministic tool execution, to the second model turn and
 explain why this is one logical agent run but potentially two model calls.
 
-## 12. Phase 4 — architecture agent
+## 12. Phase 4 - architecture agent
 
-- **Chat:** `04 — Architecture agent`
+- **Chat:** `04 - Architecture agent`
 - **Branch:** `feat/architecture-agent`
 - **Normal model calls:** one or two
 - **Status:** not started
@@ -746,7 +717,7 @@ complete Markdown and only the visual assets the agent requests.
 ### 12.2 Questions to decide in this chat
 
 - the minimum stable report sections and claim-identifier convention;
-- how a text, table, equation, caption, figure, or page reference is expressed;
+- how a text, table, equation, caption, or page reference is expressed;
 - what distinguishes reported, visually interpreted, derived, ambiguous,
   missing, and proposed information;
 - which architecture features are critical to reconstruction;
@@ -758,7 +729,7 @@ complete Markdown and only the visual assets the agent requests.
 Do not define a universal block/CAD schema in this phase. The output is
 Markdown.
 
-### 12.3 Candidate commit 4A — define the architecture report boundary
+### 12.3 Candidate commit 4A - define the architecture report boundary
 
 Suggested message:
 
@@ -777,12 +748,12 @@ Scope:
 
 Verification:
 
-- every example claim resolves to Markdown or a manifest asset;
+- every example claim resolves to Markdown or an accepted package asset;
 - unsupported information cannot be presented as reported fact;
 - the template remains readable without a generated JSON schema;
 - a valid incomplete report is representable.
 
-### 12.4 Candidate commit 4B — implement the architecture agent run
+### 12.4 Candidate commit 4B - implement the architecture agent run
 
 Suggested message:
 
@@ -792,8 +763,9 @@ feat(architecture): generate an evidence-grounded report
 
 Behaviour:
 
-- validate the document package before calling the model;
-- send complete Markdown, manifest, the focused role, and the asset tool;
+- validate the Phase 3 consumer boundary before calling the model;
+- send complete Markdown, accepted package metadata, the focused role, and the
+  asset tool;
 - execute the bounded one-round interaction from Phase 3;
 - require selection evidence or explicit selection ambiguity;
 - preserve materials, components, geometry, dimensions, relationships, feeds,
@@ -805,8 +777,7 @@ Behaviour:
 Tests with fake clients:
 
 - report without visual tool use;
-- report after exact figure requests;
-- report after a full-page fallback request;
+- report after exact visual asset requests;
 - missing evidence reference;
 - unsupported claim classification;
 - honest incomplete report;
@@ -814,7 +785,7 @@ Tests with fake clients:
 - model and tool failures preserve all prior artefacts;
 - one or two model calls are recorded accurately.
 
-### 12.5 Candidate commit 4C — benchmark the candidate scientific models
+### 12.5 Candidate commit 4C - benchmark the candidate scientific models
 
 Suggested message:
 
@@ -867,9 +838,9 @@ The user should understand how the prompt narrows the scientific task, how
 claims link to evidence, how visual requests are chosen, and why an incomplete
 grounded report is safer than a complete-looking reconstruction.
 
-## 13. Phase 5 — results agent
+## 13. Phase 5 - results agent
 
-- **Chat:** `05 — Results agent`
+- **Chat:** `05 - Results agent`
 - **Branch:** `feat/results-agent`
 - **Normal model calls:** one or two
 - **Status:** not started
@@ -894,7 +865,7 @@ contract.
 - what completeness assertions can be checked deterministically and what
   requires expert review.
 
-### 13.3 Candidate commit 5A — define the results report boundary
+### 13.3 Candidate commit 5A - define the results report boundary
 
 Suggested message:
 
@@ -919,7 +890,7 @@ Verification:
 - graph-only results can remain useful without fabricated samples;
 - every example result resolves to source evidence.
 
-### 13.4 Candidate commit 5B — implement the results agent run
+### 13.4 Candidate commit 5B - implement the results agent run
 
 Suggested message:
 
@@ -929,8 +900,10 @@ feat(results): generate an evidence-grounded report
 
 Behaviour:
 
-- load only the accepted document package, not the architecture report;
-- send complete Markdown, manifest, focused role, and asset tool;
+- load only the package accepted through the Phase 3 consumer boundary, not the
+  architecture report;
+- send complete Markdown, accepted package metadata, focused role, and asset
+  tool;
 - use the same bounded interaction protocol;
 - inventory all reported result categories, designs, variants, setups, and
   conditions;
@@ -942,8 +915,7 @@ Behaviour:
 Tests with fake clients:
 
 - text/table-only result report without tool use;
-- graph inspection through exact figure request;
-- full-page fallback;
+- graph inspection through an exact full-page asset request;
 - measured and simulated trace separation;
 - multiple variants and setup associations;
 - image-only result preservation;
@@ -952,7 +924,7 @@ Tests with fake clients:
 - one or two model calls recorded accurately;
 - architecture report is never read.
 
-### 13.5 Candidate commit 5C — benchmark result coverage
+### 13.5 Candidate commit 5C - benchmark result coverage
 
 Suggested message:
 
@@ -979,7 +951,7 @@ The benchmark must include at least:
 - multiple design variants or optimization steps;
 - a case with an image-only result that must not be digitized implicitly.
 
-### 13.6 Candidate commit 5D — share only proven mechanics, if justified
+### 13.6 Candidate commit 5D - share only proven mechanics, if justified
 
 Suggested message:
 
@@ -1015,9 +987,9 @@ The user should understand why result extraction is an exhaustive inventory
 problem, how it differs from architecture reconstruction, and how visual graphs
 can be preserved without pretending to have precise numeric samples.
 
-## 14. Phase 6 — canonicalization and final contracts
+## 14. Phase 6 - canonicalization and final contracts
 
-- **Chat:** `06 — Canonicalization and final contracts`
+- **Chat:** `06 - Canonicalization and final contracts`
 - **Branch:** `feat/canonicalization`
 - **Normal model calls:** one
 - **Status:** not started
@@ -1030,7 +1002,8 @@ mechanically into the two final JSON documents.
 
 ### 14.2 Fixed decisions for this phase
 
-- the canonicalizer receives both reports and `manifest.json`;
+- the canonicalizer receives both reports and the minimum package identity
+  metadata needed for reference validation;
 - it does not receive `document.md`, the PDF, figures, or pages;
 - it organizes rather than reinterprets scientific evidence;
 - the model-facing schema is small and flexible;
@@ -1058,7 +1031,7 @@ mechanically into the two final JSON documents.
 Do not revive the large v2 schema. Any field without a current report example
 and consumer need should be deferred.
 
-### 14.4 Candidate commit 6A — define the shallow final boundary
+### 14.4 Candidate commit 6A - define the shallow final boundary
 
 Suggested message:
 
@@ -1086,7 +1059,7 @@ Tests:
 - the schema is materially smaller and shallower than the abandoned direct
   extraction schema.
 
-### 14.5 Candidate commit 6B — implement report canonicalization
+### 14.5 Candidate commit 6B - implement report canonicalization
 
 Suggested message:
 
@@ -1097,7 +1070,8 @@ feat(canonicalization): organize evidence reports
 Behaviour:
 
 - validate both reports and package identity;
-- send only the two reports, manifest, role prompt, and shallow contract;
+- send only the two reports, required package identity metadata, role prompt,
+  and shallow contract;
 - require claim preservation and explicit disposition;
 - preserve ambiguity and exact evidence links;
 - persist raw response before parsing;
@@ -1116,7 +1090,7 @@ Tests with a fake client:
 - no access to PDF, Markdown, figures, or pages;
 - exactly one model call and no tool execution.
 
-### 14.6 Candidate commit 6C — verify claim disposition and split outputs
+### 14.6 Candidate commit 6C - verify claim disposition and split outputs
 
 Suggested message:
 
@@ -1145,7 +1119,7 @@ Tests:
 - exact values, units, and evidence references survive;
 - deterministic ordering is stable where promised.
 
-### 14.7 Candidate commit 6D — select the canonicalization model
+### 14.7 Candidate commit 6D - select the canonicalization model
 
 Suggested message:
 
@@ -1183,11 +1157,11 @@ The user should understand why schema pressure was postponed, how a shallow
 contract differs from an untyped blob, how claim accounting prevents silent
 loss, and why deterministic splitting is safe while semantic repair is not.
 
-## 15. Phase 7 — end-to-end runner
+## 15. Phase 7 - end-to-end runner
 
-- **Chat:** `07 — End-to-end runner`
+- **Chat:** `07 - End-to-end runner`
 - **Branch:** `feat/end-to-end`
-- **Normal model calls:** four to six
+- **Normal model calls:** `B + 3` to `B + 5`
 - **Status:** not started
 
 ### 15.1 Objective
@@ -1205,7 +1179,7 @@ outputs when all required gates pass.
 - non-zero exit status policy for incomplete but structurally valid reports;
 - what summary is printed without hiding the detailed run artefacts.
 
-### 15.3 Candidate commit 7A — orchestrate the sequential pipeline
+### 15.3 Candidate commit 7A - orchestrate the sequential pipeline
 
 Suggested message:
 
@@ -1217,7 +1191,8 @@ Normal order:
 
 1. initialize the run and preserve the PDF;
 2. render ordered pages;
-3. call NuExtract3 and validate the document package;
+3. make `B` sequential NuExtract3 batch calls and validate the package boundary
+   accepted for downstream consumption;
 4. execute the architecture agent;
 5. execute the results agent;
 6. canonicalize when both reports are valid;
@@ -1231,10 +1206,10 @@ canonicalization waits for both. There is no concurrent call.
 Tests:
 
 - exact phase order;
-- all no-tool path gives four model calls;
-- both agents using assets gives six model calls and two deterministic tool
+- all no-tool path gives `B + 3` model calls;
+- both agents using assets gives `B + 5` model calls and two deterministic tool
   executions;
-- mixed tool-use path gives five model calls;
+- mixed tool-use path gives `B + 4` model calls;
 - NuExtract failure skips all scientific phases;
 - architecture failure does not erase the package and may still allow the
   results report;
@@ -1243,7 +1218,7 @@ Tests:
 - no handled failure leaves a phase running;
 - no automatic retry occurs.
 
-### 15.4 Candidate commit 7B — support explicit phase inspection or rerun
+### 15.4 Candidate commit 7B - support explicit phase inspection or rerun
 
 Suggested message:
 
@@ -1251,7 +1226,7 @@ Suggested message:
 feat(cli): expose explicit phase execution
 ```
 
-This commit is conditional. Implement it only if Phase 4–6 development shows a
+This commit is conditional. Implement it only if Phase 4-6 development shows a
 real need to rerun one expensive phase without repeating NuExtract3.
 
 If implemented, it must:
@@ -1266,7 +1241,7 @@ If implemented, it must:
 If the need is not yet demonstrated, skip this commit and use new runs for the
 baseline.
 
-### 15.5 Candidate commit 7C — add end-to-end fixtures and operator docs
+### 15.5 Candidate commit 7C - add end-to-end fixtures and operator docs
 
 Suggested message:
 
@@ -1287,7 +1262,8 @@ Scope:
 ### 15.6 Phase 7 completion gate
 
 - one command runs the pipeline sequentially;
-- the command reports four, five, or six actual model calls correctly;
+- the command reports `B + 3`, `B + 4`, or `B + 5` actual model calls
+  correctly;
 - no hidden or parallel model work occurs;
 - valid partial artefacts survive later failure;
 - final JSON files appear only after all relevant gates pass;
@@ -1301,9 +1277,9 @@ The user should be able to follow the state transition of an entire run,
 identify every model and tool boundary, and explain why independent partial
 reports survive without turning the runner into a complex workflow engine.
 
-## 16. Phase 8 — scientific benchmark and baseline
+## 16. Phase 8 - scientific benchmark and baseline
 
-- **Chat:** `08 — Scientific benchmark and baseline`
+- **Chat:** `08 - Scientific benchmark and baseline`
 - **Branch:** `test/scientific-benchmark`
 - **Model calls:** explicit, sequential, and reported per experiment
 - **Status:** not started
@@ -1334,7 +1310,7 @@ The benchmark set is versioned. Papers that cannot be redistributed are
 referenced through checksums and local setup instructions, not committed
 illegally.
 
-### 16.3 Candidate commit 8A — define scientific acceptance assertions
+### 16.3 Candidate commit 8A - define scientific acceptance assertions
 
 Suggested message:
 
@@ -1346,7 +1322,8 @@ For each paper, record expected assertions at four boundaries:
 
 **Document package**
 
-- sections, tables, equations, captions, and figures that must be present;
+- sections, tables, equations, and captions that must be present;
+- required full-page visual evidence;
 - page and asset traceability;
 - known conversion limitations.
 
@@ -1376,7 +1353,7 @@ For each paper, record expected assertions at four boundaries:
 Separate deterministic assertions from expert-review questions. Do not encode
 an expert visual judgement as a brittle string test.
 
-### 16.4 Candidate commit 8B — run and record the frozen baseline
+### 16.4 Candidate commit 8B - run and record the frozen baseline
 
 Suggested message:
 
@@ -1409,7 +1386,7 @@ The comparison with v2 should focus on observable failure classes:
 - evidence that cannot be resolved;
 - total calls and latency.
 
-### 16.5 Candidate commit 8C — freeze the accepted baseline
+### 16.5 Candidate commit 8C - freeze the accepted baseline
 
 Suggested message:
 
@@ -1463,8 +1440,11 @@ scripted fake responses for:
 - run identity and artefact persistence;
 - page order and rendering metadata;
 - model request construction;
-- raw-response and failure preservation;
-- document-package validation;
+- ordered document-conversion batches;
+- OpenAI-compatible response parsing;
+- raw-response, trace, and failure preservation;
+- final Markdown assembly only after complete success;
+- consumer-specific package validation when Phase 3 defines it;
 - asset resolution and limits;
 - one-round agent interaction;
 - report-boundary validation;
@@ -1591,7 +1571,7 @@ At the end of a phase, update at least:
 Use a message like this, adapted to the actual phase:
 
 ```text
-Estamos a trabalhar na Fase <N> — <nome> do Antenna Extraction v3, no novo
+Estamos a trabalhar na Fase <N> - <nome> do Antenna Extraction v3, no novo
 repositório, branch <branch>.
 
 Lê por completo 00_ARCHITECTURE_V3.md e 01_IMPLEMENTATION_ROADMAP_V3.md.
@@ -1678,11 +1658,12 @@ or workflow abstraction because it seems generally useful. Require:
 Examples:
 
 - A second asset-tool round requires papers where one round repeatedly fails
-  despite a clear manifest and prompt.
+  despite clear package metadata and a clear prompt.
 - A separate visual model requires evidence that eligible scientific models
   cannot interpret returned images and that the added boundary improves
   accuracy.
-- Context batching requires a measured complete-Markdown endpoint failure.
+- Changes to document-conversion batching require a measured endpoint failure
+  or a reproducible quality problem.
 - RAG requires a corpus-scale requirement or a new architectural use case, not
   merely a long paper.
 - A reviewer requires reproducible false-complete outputs that cannot be
@@ -1702,16 +1683,21 @@ The first v3 baseline is complete only when all of the following are true.
 
 ### Document preservation
 
-- one paper produces a validated immutable `DocumentPackage`;
+- one paper produces the Phase 1 and Phase 2 `DocumentPackage` artefact set;
 - the complete Markdown preserves prose, tables, equations, and captions;
 - no table or equation crops exist;
-- figures and page fallbacks resolve safely through the manifest;
-- conversion traces and raw responses are inspectable.
+- full-page visual assets and page identity are recorded in
+  `pages/pages.json`;
+- `B = ceil(page_count / 8)` sequential conversions cover every page exactly
+  once and in source order;
+- conversion traces and raw responses are inspectable;
+- safe asset resolution and consumer-specific validation are added when Phase
+  3 defines their consumer boundary.
 
 ### Scientific agents
 
 - architecture and results operate independently from the same package;
-- each initially receives complete Markdown and manifest;
+- each initially receives complete Markdown and the accepted package metadata;
 - each uses zero or one deterministic asset-tool execution;
 - each produces a readable evidence report;
 - every material claim has evidence or an explicit uncertainty state;
@@ -1719,7 +1705,8 @@ The first v3 baseline is complete only when all of the following are true.
 
 ### Canonical outputs
 
-- one canonicalization call receives only the two reports and manifest;
+- one canonicalization call receives only the two reports and required package
+  identity metadata;
 - the model-facing contract is shallow and flexible;
 - every report claim has a disposition;
 - deterministic code writes exactly
@@ -1730,7 +1717,7 @@ The first v3 baseline is complete only when all of the following are true.
 ### Reliability
 
 - normal execution is sequential;
-- actual model calls are reported as four, five, or six;
+- actual model calls are reported as `B + 3`, `B + 4`, or `B + 5`;
 - no automatic retries, fallbacks, reviewers, hidden VLM, or parallel work
   occur;
 - completed artefacts survive later failures;
@@ -1750,26 +1737,15 @@ The first v3 baseline is complete only when all of the following are true.
 ## 26. Immediate next action
 
 Phase 1 is complete and was integrated into `main` with squash merge
-`9691dd69e622be0b3606028819308f240c00dd12`.
+`9691dd69e622be0b3606028819308f240c00dd12`. Phase 2 implementation is complete
+on `feat/document-package` and has not been merged into `main`.
 
-After this roadmap update is merged and the ChatGPT Project Source is refreshed,
-begin only Phase 2:
+Next steps:
 
-1. update the local repository from the accepted `main`;
-2. create chat `02 — NuExtract3 DocumentPackage`;
-3. read `00_ARCHITECTURE_V3.md` and this roadmap completely;
-4. inspect the current HEAD, working tree, Phase 1 artefacts, code, and tests;
-5. run an explicit, sequential capability probe against the deployed
-   NuExtract3 endpoint;
-6. record the observed input route, response format, Markdown behaviour, figure
-   outputs, limits, finish metadata, and redacted failure behaviour;
-7. resolve the package location, manifest boundary, and lifecycle compatibility
-   decisions using the probe results;
-8. agree on the smallest coherent implementation of Candidate Commit 2A;
-9. review that commit and its local tests before discussing Candidate Commit
-    2B.
+1. Finish the Phase 2 documentation and final repository checks.
+2. Let the repository owner review and merge Phase 2.
+3. Begin Phase 3 only after the Phase 2 contract is accepted.
 
-Production code must not assume undocumented NuExtract3 capabilities. If the
-capability probe does not establish a reliable route for complete Markdown or
-figure materialization, stop and record the measured limitation before changing
-the architecture or expanding the implementation.
+Do not record an accepted Phase 2 merge SHA until the merge exists. Phase 3
+must inspect the merged implementation and define safe asset resolution and
+consumer-specific validation from a concrete consumer need.

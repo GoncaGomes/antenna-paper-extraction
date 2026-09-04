@@ -5,14 +5,30 @@ from pathlib import Path
 import pypdfium2 as pdfium
 import pytest
 from PIL import Image
+from pydantic import ValidationError
 from pypdf import PdfWriter
 
 from antenna_paper_extraction import pages
-from antenna_paper_extraction.pages import render_pdf_pages
+from antenna_paper_extraction.pages import (
+    load_pages_manifest,
+    render_pdf_pages,
+)
 from antenna_paper_extraction.runs import (
     create_run,
     load_run_status,
 )
+
+
+def test_rendering_settings_defaults() -> None:
+    settings = pages.RenderingSettings(renderer_version="test-version")
+
+    assert settings.renderer_name == "pypdfium2"
+    assert settings.renderer_version == "test-version"
+    assert settings.dpi == 170
+    assert settings.image_format == "png"
+    assert settings.color_space == "RGB"
+    assert settings.background_color == "white"
+    assert settings.draw_annotations is True
 
 
 def test_render_pdf_pages_renders_one_page(tmp_path: Path) -> None:
@@ -36,7 +52,7 @@ def test_render_pdf_pages_renders_one_page(tmp_path: Path) -> None:
     assert page.asset_id == "page_0001"
     assert page.relative_path == "pages/page_0001.png"
     assert (run_dir / page.relative_path).is_file()
-    assert (run_dir / "pages.json").is_file()
+    assert (run_dir / "pages" / "pages.json").is_file()
 
 
 def test_render_pdf_pages_preserves_source_order(tmp_path: Path) -> None:
@@ -64,9 +80,9 @@ def test_render_pdf_pages_preserves_source_order(tmp_path: Path) -> None:
         "page_0003.png",
     ]
     assert [(page.width_pixels, page.height_pixels) for page in manifest.pages] == [
-        (200, 200),
-        (400, 200),
-        (200, 400),
+        (170, 170),
+        (340, 170),
+        (170, 340),
     ]
 
 
@@ -79,7 +95,9 @@ def test_render_pdf_pages_writes_consistent_manifest_and_assets(
 
     render_pdf_pages(run_dir)
 
-    manifest = json.loads((run_dir / "pages.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (run_dir / "pages" / "pages.json").read_text(encoding="utf-8")
+    )
     source_pdf = run_dir / "input" / "source.pdf"
     source_sha256 = hashlib.sha256(source_pdf.read_bytes()).hexdigest()
 
@@ -92,7 +110,7 @@ def test_render_pdf_pages_writes_consistent_manifest_and_assets(
     render_settings = manifest["render_settings"]
     assert render_settings["renderer_name"] == "pypdfium2"
     assert render_settings["renderer_version"]
-    assert render_settings["dpi"] == 200
+    assert render_settings["dpi"] == 170
     assert render_settings["image_format"] == "png"
     assert render_settings["color_space"] == "RGB"
     assert render_settings["background_color"] == "white"
@@ -246,3 +264,142 @@ def write_encrypted_pdf(path: Path, password: str) -> None:
     writer.encrypt(password)
     with path.open("wb") as file:
         writer.write(file)
+
+
+def test_load_pages_manifest_loads_rendered_manifest(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72), (144, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+    rendered_manifest = render_pdf_pages(run_dir)
+
+    loaded_manifest = load_pages_manifest(run_dir)
+
+    assert loaded_manifest == rendered_manifest
+
+
+def test_load_pages_manifest_rejects_page_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72), (144, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+    render_pdf_pages(run_dir)
+
+    manifest_path = run_dir / "pages" / "pages.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["page_count"] = 3
+    manifest_path.write_text(
+        json.dumps(manifest_data),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="Page count does not match page asset count",
+    ):
+        load_pages_manifest(run_dir)
+
+
+def test_load_pages_manifest_rejects_out_of_order_pages(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72), (144, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+    render_pdf_pages(run_dir)
+
+    manifest_path = run_dir / "pages" / "pages.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["pages"] = list(reversed(manifest_data["pages"]))
+    manifest_path.write_text(
+        json.dumps(manifest_data),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="Pages must be contiguous, one-based, and ordered",
+    ):
+        load_pages_manifest(run_dir)
+
+
+def test_load_pages_manifest_rejects_mismatched_asset_id(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72), (144, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+    render_pdf_pages(run_dir)
+
+    manifest_path = run_dir / "pages" / "pages.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["pages"][0]["asset_id"] = "page_9999"
+    manifest_path.write_text(
+        json.dumps(manifest_data),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="Page asset_id does not match page_number",
+    ):
+        load_pages_manifest(run_dir)
+
+
+def test_load_pages_manifest_rejects_mismatched_relative_path(
+    tmp_path: Path,
+) -> None:
+    input_pdf = tmp_path / "source.pdf"
+    write_pdf(input_pdf, [(72, 72), (144, 72)])
+
+    run_dir = create_run(input_pdf, tmp_path / "runs")
+    render_pdf_pages(run_dir)
+
+    manifest_path = run_dir / "pages" / "pages.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["pages"][0]["relative_path"] = "pages/page_9999.png"
+    manifest_path.write_text(
+        json.dumps(manifest_data),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="Page relative_path does not match its canonical identity",
+    ):
+        load_pages_manifest(run_dir)
+
+
+def test_load_pages_manifest_rejects_missing_manifest(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        load_pages_manifest(run_dir)
+
+
+def test_load_pages_manifest_rejects_malformed_json(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    page_dir = run_dir / "pages"
+    page_dir.mkdir()
+
+    manifest_path = run_dir / "pages" / "pages.json"
+    manifest_path.write_text(
+        "{not-valid-json",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        load_pages_manifest(run_dir)
