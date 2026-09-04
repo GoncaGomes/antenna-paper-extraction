@@ -19,6 +19,18 @@ from antenna_paper_extraction.runs import (
 )
 
 
+def test_rendering_settings_defaults() -> None:
+    settings = pages.RenderingSettings(renderer_version="test-version")
+
+    assert settings.renderer_name == "pypdfium2"
+    assert settings.renderer_version == "test-version"
+    assert settings.dpi == 170
+    assert settings.image_format == "png"
+    assert settings.color_space == "RGB"
+    assert settings.background_color == "white"
+    assert settings.draw_annotations is True
+
+
 def test_render_pdf_pages_renders_one_page(tmp_path: Path) -> None:
     input_pdf = tmp_path / "paper with spaces.pdf"
     write_pdf(input_pdf, [(72, 72)])
