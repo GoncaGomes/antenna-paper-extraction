@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -31,15 +30,11 @@ from antenna_paper_extraction.runs import (
 
 DOCUMENT_CONVERSION_INSTRUCTION = (
     "Convert the following page images into one Markdown document "
-    "in the provided order. Each PAGE_ID marker immediately "
-    "precedes the image it identifies. Copy each marker exactly "
-    "once into the output immediately before the Markdown "
-    "transcribed from that image. Do not include this instruction "
-    "in the output. Do not rename, omit, duplicate, or reorder "
-    "the PAGE_ID markers."
+    "in the provided order. Preserve the complete readable content, "
+    "including headings, prose, tables, equations, figure and table "
+    "captions, labels, symbols, units, footnotes, and references. "
+    "Do not summarize, omit, interpret, or reorder the content."
 )
-
-PAGE_ID_PATTERN = re.compile(r"<!-- PAGE_ID: (page_[0-9]{4,}) -->")
 
 
 class _ResponseMessage(BaseModel):
@@ -88,7 +83,6 @@ class DocumentConversionTrace(BaseModel):
 def parse_document_markdown_response(
     *,
     response: RawChatCompletion,
-    expected_page_ids: tuple[str, ...],
 ) -> ParsedDocumentResponse:
     if not 200 <= response.status_code < 300:
         raise ValueError(
@@ -111,11 +105,6 @@ def parse_document_markdown_response(
 
     if not markdown.strip():
         raise ValueError("NuExtract3 returned empty Markdown content.")
-
-    actual_page_ids = tuple(PAGE_ID_PATTERN.findall(markdown))
-
-    if actual_page_ids != expected_page_ids:
-        raise ValueError(f"NuExtract3 returned unexpected page IDs: {actual_page_ids}")
 
     return ParsedDocumentResponse(
         markdown=markdown,
@@ -206,7 +195,6 @@ def convert_document_to_markdown(
 
         parsed_response = parse_document_markdown_response(
             response=response,
-            expected_page_ids=tuple(page.asset_id for page in pages_manifest.pages),
         )
 
         failure_stage = "trace persistence"
@@ -274,10 +262,6 @@ def build_document_messages(
 
         request_content.extend(
             [
-                {
-                    "type": "text",
-                    "text": f"<!-- PAGE_ID: {page.asset_id} -->",
-                },
                 {
                     "type": "image_url",
                     "image_url": {

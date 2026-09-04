@@ -65,16 +65,8 @@ def test_build_document_messages_preserves_page_order_and_identity(
                     "text": DOCUMENT_CONVERSION_INSTRUCTION,
                 },
                 {
-                    "type": "text",
-                    "text": "<!-- PAGE_ID: page_0001 -->",
-                },
-                {
                     "type": "image_url",
                     "image_url": {"url": ("data:image/png;base64,Zmlyc3QtcGFnZQ==")},
-                },
-                {
-                    "type": "text",
-                    "text": "<!-- PAGE_ID: page_0002 -->",
                 },
                 {
                     "type": "image_url",
@@ -238,7 +230,6 @@ def test_parse_document_markdown_response_accepts_openai_compatible_envelope() -
 
     parsed_response = parse_document_markdown_response(
         response=response,
-        expected_page_ids=("page_0001",),
     )
 
     assert parsed_response.markdown == markdown
@@ -274,7 +265,6 @@ def test_parse_document_markdown_response_rejects_non_string_content() -> None:
     with pytest.raises(ValidationError, match="content"):
         parse_document_markdown_response(
             response=response,
-            expected_page_ids=("page_0001",),
         )
 
 
