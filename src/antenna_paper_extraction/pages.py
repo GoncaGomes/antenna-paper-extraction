@@ -89,7 +89,7 @@ def load_pages_manifest(run_dir: Path) -> PagesManifest:
 def render_pdf_pages(
     run_dir: Path,
     *,
-    dpi: int = 200,
+    dpi: int = 170,
 ) -> PagesManifest:
 
     mark_page_rendering_running(run_dir)

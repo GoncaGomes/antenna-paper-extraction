@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     render_pages = subparser.add_parser("render-pages")
     render_pages.add_argument("run_dir", type=Path, help="Existing run directory")
-    render_pages.add_argument("--dpi", type=int, default=200, help="DPI")
+    render_pages.add_argument("--dpi", type=int, default=170, help="DPI")
 
     convert_document = subparser.add_parser("convert-document")
     convert_document.add_argument(
