@@ -4,7 +4,7 @@
 - **Version:** 3.1-draft
 - **Date:** 2026-09-04
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
-- **Current implementation phase:** Phase 2 - NuExtract3 DocumentPackage
+- **Current implementation phase:** Phase 3 - Bounded asset inspection
 
 ## 1. Purpose
 
@@ -436,7 +436,7 @@ a workflow engine.
 - **Chat:** `02 - NuExtract3 DocumentPackage`
 - **Branch:** `feat/document-package`
 - **Normal model calls:** `B = ceil(page_count / 8)`
-- **Status:** implementation complete, pending merge
+- **Status:** implementation complete and merged
 
 ### 10.1 Objective
 
@@ -1738,7 +1738,7 @@ The first v3 baseline is complete only when all of the following are true.
 
 Phase 1 is complete and was integrated into `main` with squash merge
 `9691dd69e622be0b3606028819308f240c00dd12`. Phase 2 implementation is complete
-on `feat/document-package` and has not been merged into `main`.
+on `feat/document-package` and has been merged into `main` with squash merge `d88ba548f32254edd97ba10f7c90e4e74393d083`.
 
 Next steps:
 

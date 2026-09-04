@@ -9,7 +9,7 @@ The final consumer-facing outputs will be:
 
 The complete extraction pipeline is not implemented. Phase 1 and the Phase 2
 NuExtract3 document-conversion implementation are available on the current
-`feat/document-package` feature branch. Phase 2 has not been merged into
+`feat/document-package` feature branch. Phase 2 has been merged into
 `main`.
 
 ## Project status

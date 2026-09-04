@@ -1,6 +1,6 @@
 # Antenna Extraction v3 - Architectural Decision
 
-**Status:** draft; Phase 2 implementation is complete on its feature branch and pending merge
+**Status:** Phase 3 initialization
 
 **Version:** 3.1-draft
 
