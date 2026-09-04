@@ -82,7 +82,7 @@ class PagesManifest(BaseModel):
 
 
 def load_pages_manifest(run_dir: Path) -> PagesManifest:
-    manifest_path = run_dir / "pages.json"
+    manifest_path = run_dir / "pages" / "pages.json"
     return PagesManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
 
 
@@ -102,7 +102,7 @@ def render_pdf_pages(
 
         source_pdf = run_dir / run_manifest.source_pdf.relative_path
         output_dir = run_dir / "pages"
-        manifest_path = run_dir / "pages.json"
+        pages_manifest_path = output_dir / "pages.json"
 
         _validate_source_pdf(source_pdf)
 
@@ -116,7 +116,7 @@ def render_pdf_pages(
         if document_id != run_manifest.document_id:
             raise ValueError("Run document identity does not match manifest.")
 
-        if output_dir.exists() or manifest_path.exists():
+        if output_dir.exists() or pages_manifest_path.exists():
             raise FileExistsError(
                 f"Page rendering output already exists for run: {run_dir}"
             )
@@ -172,7 +172,7 @@ def render_pdf_pages(
         )
 
         write_json(
-            manifest_path,
+            pages_manifest_path,
             pages_manifest.model_dump(mode="json"),
         )
 

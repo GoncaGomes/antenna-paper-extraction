@@ -35,6 +35,7 @@ DOCUMENT_CONVERSION_INSTRUCTION = (
     "captions, labels, symbols, units, footnotes, and references. "
     "Do not summarize, omit, interpret, or reorder the content."
 )
+DOCUMENT_CONVERSION_BATCH_SIZE = 8
 
 
 class _ResponseMessage(BaseModel):
@@ -139,13 +140,20 @@ def convert_document_to_markdown(
     if pages_manifest.document_id != run_manifest.document_id:
         raise ValueError("Page manifest document identity does not match run manifest")
 
-    raw_response_path = run_dir / "nuextract3_raw_response.json"
-    document_path = run_dir / "document.md"
-    trace_path = run_dir / "nuextract3_trace.json"
+    conversion_path = run_dir / "document_conversion"
+    conversion_path.mkdir(parents=True, exist_ok=True)
 
-    existing_outputs = tuple(
-        path for path in (raw_response_path, document_path, trace_path) if path.exists()
+    document_path = conversion_path / "document.md"
+
+    existing_outputs = sorted(
+        (
+            document_path,
+            *conversion_path.glob("nuextract3_raw_response_batch_*.json"),
+            *conversion_path.glob("nuextract3_trace_batch_*.json"),
+        ),
+        key=lambda path: path.name,
     )
+    existing_outputs = tuple(path for path in existing_outputs if path.exists())
 
     if existing_outputs:
         existing_names = ", ".join(path.name for path in existing_outputs)
@@ -162,64 +170,85 @@ def convert_document_to_markdown(
     failure_stage = "request preparation"
 
     try:
-        messages = build_document_messages(
-            run_dir=run_dir,
-            pages=pages_manifest.pages,
-        )
+        batch_markdowns: list[str] = []
 
-        failure_stage = "model request"
-        request_started = perf_counter()
+        for batch_number, batch_start in enumerate(
+            range(0, len(pages_manifest.pages), DOCUMENT_CONVERSION_BATCH_SIZE),
+            start=1,
+        ):
+            batch_pages = pages_manifest.pages[
+                batch_start : batch_start + DOCUMENT_CONVERSION_BATCH_SIZE
+            ]
+            raw_response_path = conversion_path / (
+                f"nuextract3_raw_response_batch_{batch_number:04d}.json"
+            )
+            trace_path = conversion_path / (
+                f"nuextract3_trace_batch_{batch_number:04d}.json"
+            )
 
-        response = client.create_raw_chat_completion(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            extra_body={
-                "chat_template_kwargs": {
-                    "mode": mode,
-                    "enable_thinking": enable_thinking,
-                }
-            },
-        )
+            failure_stage = "request preparation"
+            messages = build_document_messages(
+                run_dir=run_dir,
+                pages=batch_pages,
+            )
 
-        model_latency_seconds = perf_counter() - request_started
+            failure_stage = "model request"
+            request_started = perf_counter()
 
-        failure_stage = "raw response persistence"
+            response = client.create_raw_chat_completion(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                extra_body={
+                    "chat_template_kwargs": {
+                        "mode": mode,
+                        "enable_thinking": enable_thinking,
+                    }
+                },
+            )
 
-        write_bytes(
-            raw_response_path,
-            response.body,
-        )
+            model_latency_seconds = perf_counter() - request_started
 
-        failure_stage = "response parsing"
+            failure_stage = "raw response persistence"
 
-        parsed_response = parse_document_markdown_response(
-            response=response,
-        )
+            write_bytes(
+                raw_response_path,
+                response.body,
+            )
 
-        failure_stage = "trace persistence"
+            failure_stage = "response parsing"
 
-        trace = DocumentConversionTrace(
-            requested_model=model,
-            temperature=temperature,
-            mode=mode,
-            enable_thinking=enable_thinking,
-            http_status_code=response.status_code,
-            finish_reason=parsed_response.finish_reason,
-            usage=parsed_response.usage,
-            model_latency_seconds=model_latency_seconds,
-        )
+            parsed_response = parse_document_markdown_response(
+                response=response,
+            )
 
-        write_json(
-            trace_path,
-            trace.model_dump(mode="json"),
-        )
+            failure_stage = "trace persistence"
+
+            trace = DocumentConversionTrace(
+                requested_model=model,
+                temperature=temperature,
+                mode=mode,
+                enable_thinking=enable_thinking,
+                http_status_code=response.status_code,
+                finish_reason=parsed_response.finish_reason,
+                usage=parsed_response.usage,
+                model_latency_seconds=model_latency_seconds,
+            )
+
+            write_json(
+                trace_path,
+                trace.model_dump(mode="json"),
+            )
+
+            batch_markdowns.append(parsed_response.markdown)
+
+        document_markdown = "\n\n".join(batch_markdowns)
 
         failure_stage = "document persistence"
 
         write_bytes(
             document_path,
-            parsed_response.markdown.encode("utf-8"),
+            document_markdown.encode("utf-8"),
         )
 
         failure_stage = "status update"
