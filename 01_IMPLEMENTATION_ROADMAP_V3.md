@@ -122,7 +122,7 @@ working vertical slices.
 | 0 | `00 - Foundation and project rules` | `chore/foundation` | Clean, governed development baseline |
 | 1 | `01 - Run lifecycle and source preservation` | `feat/run-lifecycle` | Deterministic run and ordered page artefacts |
 | 2 | `02 - NuExtract3 DocumentPackage` | `feat/document-package` | Combined Markdown, ordered page assets, and per-batch diagnostics |
-| 3 | `03 - Bounded asset inspection` | `feat/asset-inspection` | Consumer-specific package validation, safe asset resolution, and one-round interaction control |
+| 3 | `03 - Bounded asset inspection` | `feat/asset-inspection` | Post-conversion figures, minimal visual catalogue, safe asset resolution, and one-round interaction control |
 | 4 | `04 - Architecture agent` | `feat/architecture-agent` | `architecture_evidence_report.md` |
 | 5 | `05 - Results agent` | `feat/results-agent` | `results_evidence_report.md` |
 | 6 | `06 - Canonicalization and final contracts` | `feat/canonicalization` | Two validated final JSON documents |
@@ -525,12 +525,12 @@ nothing. Conversion stops at the first failure and does not write
 
 Separate figure materialization, a new unified package manifest, and a
 dedicated immutable-package validator are not part of the Phase 2 completion
-gate. Rendered full-page images and the existing manifests are sufficient for
-the next implementation phase.
+gate. Rendered full-page images and the existing manifests remain the
+implemented Phase 2 boundary.
 
-Phase 3 should introduce safe asset resolution and consumer-specific package
-validation when its concrete consumer is defined. Separate figures should be
-added only if evidence shows that full-page assets are insufficient.
+Phase 3 replaces that page-only consumer boundary with post-conversion figure
+extraction, a minimal visual catalogue, and safe figure and page resolution.
+This planned extension does not change Phase 2 completion criteria.
 
 ### 10.6 Human and remote evidence
 
@@ -570,24 +570,47 @@ package boundary.
 
 - **Chat:** `03 - Bounded asset inspection`
 - **Branch:** `feat/asset-inspection`
-- **Model calls:** none in deterministic tool tests; up to two in an integration agent run
+- **Model calls:** one without inspection, or two plus one tool execution with inspection
+- **Preprocessing cost:** separate, explicit Docling local layout inference
 - **Status:** not started
 
 ### 11.1 Objective
 
-Define the consumer-specific package validation boundary and implement the
-controlled mechanism by which a scientific agent can request exact full-page
-assets declared in `pages/pages.json` and receive them in a second model turn.
+Extract figures after document conversion, then implement safe asset resolution
+and bounded inspection using the complete Markdown and a minimal visual
+catalogue. Figures are preferred; full pages remain available as fallback.
+Figure extraction and Phase 3 are not implemented. Architecture Agent, Results
+Agent, canonicalization, and final outputs remain outside this batch's scope.
 
 ### 11.2 Fixed decisions for this phase
 
-- agents initially receive `document.md` and the minimum accepted package
-  metadata defined in this phase;
-- the requesting agent chooses exact asset identifiers;
+- figure extraction reads `document_conversion/document.md` and the preserved
+  PDF in a separate step after conversion, never within `render-pages`;
+- runs have sibling `input/`, `pages/`, `document_conversion/`, and `figures/`
+  directories; `figures/` holds images and one small JSON manifest;
+- Docling detects regions and captions; existing caption associations take
+  precedence over conservative geometric recovery, which requires an
+  unambiguous same-page match and validation;
+- uncaptioned candidates remain available until recovery is attempted;
+  selection is structural, not based on scientific relevance;
+- match Markdown captions by original figure label, such as “Fig. 8”, never
+  by crop index or file order; use only unique, coherent Markdown matches,
+  preserve original Docling captions and association provenance, and record
+  missing or ambiguous matches explicitly;
+- pypdfium2 renders from the preserved original PDF, not 170-DPI page PNGs;
+  render each required page once per extraction execution and reuse it;
+- keep complete compound figures together, with no table or equation crops;
+- preserve source-page links and metadata needed for safe asset resolution;
+- agents initially receive complete Markdown and the minimal visual catalogue;
+- the requesting agent chooses exact figure IDs and/or page IDs in one round;
 - the tool is deterministic and contains no model;
 - returned images are interpreted by the same scientific model;
 - one scientific agent run has at most one tool round;
 - no semantic search, similarity ranking, or automatic page selection occurs.
+
+Reported experiments found scale 3.0 and a 2-point margin useful. These are
+initial settings to validate, not implemented or accepted production defaults.
+Manual visual review and end-to-end latency measurement remain required.
 
 ### 11.3 Questions to decide in this chat
 
@@ -596,10 +619,36 @@ assets declared in `pages/pages.json` and receive them in a second model turn.
 - maximum assets and payload per one round based on the endpoint probe;
 - how the endpoint represents image tool results;
 - how invalid, oversized, or duplicate requests are reported;
-- whether evidence justifies separate figure assets in addition to the current
-  full-page assets.
+- exact figure manifest filename and minimal schema;
+- geometric recovery parameters and acceptance cases;
+- validation of initial rendering settings on representative papers.
 
-### 11.4 Candidate commit 3A - validate and resolve package assets safely
+### 11.4 Candidate commit 3A - extract figures after document conversion
+
+Suggested message:
+
+```text
+feat(document): extract traceable figures after conversion
+```
+
+Behaviour and acceptance evidence:
+
+- require successful conversion and its Markdown before extraction;
+- implement the detection, association, label matching, and rendering decisions
+  in section 11.2, with inspectable failures and atomic artefact persistence;
+- test existing and recovered associations, uncaptioned candidates, duplicate
+  or missing labels, ambiguous geometry, and crop order differing from labels;
+- test source-page links, crop bounds, complete compound figures, PDF-based
+  rendering, and one render per required page per execution;
+- manually review representative crops and caption associations against the
+  original PDF and Markdown, including unresolved cases;
+- measure end-to-end preprocessing latency from run initialization through
+  figure persistence, separating conversion, Docling inference, and rendering.
+
+Use local fixtures for normal tests. Experimental success alone does not
+satisfy the implementation gate.
+
+### 11.5 Candidate commit 3B - validate and resolve package assets safely
 
 Suggested message:
 
@@ -609,7 +658,8 @@ feat(tools): resolve manifest-backed visual assets
 
 Behaviour:
 
-- define and validate the package boundary required by this consumer;
+- depend on accepted figure extraction and the existing page manifest;
+- define and validate the minimal visual catalogue and asset boundary;
 - load only package artefacts that satisfy that boundary;
 - accept exact declared identifiers;
 - enforce count and payload limits;
@@ -620,7 +670,7 @@ Behaviour:
 
 Tests:
 
-- full-page resolution;
+- figure, full-page, and mixed-request resolution with source-page links;
 - unknown and duplicate identifiers;
 - path traversal attempts;
 - payload and count limits;
@@ -628,11 +678,9 @@ Tests:
 - altered asset hash;
 - no file access outside the package.
 
-Do not add separate figure files or a broader package schema unless a concrete
-Phase 3 case demonstrates that the existing page assets and manifests are
-insufficient.
+Keep the figure manifest small and add only metadata needed by this consumer.
 
-### 11.5 Candidate commit 3B - enforce one tool round
+### 11.6 Candidate commit 3C - enforce one tool round
 
 Suggested message:
 
@@ -642,8 +690,8 @@ feat(agents): add a bounded visual tool interaction
 
 Behaviour:
 
-- invoke the model with Markdown, accepted package metadata, role prompt, and
-  tool definition;
+- invoke the model with complete Markdown, minimal visual catalogue, role
+  prompt, and tool definition;
 - accept either a final report or one valid asset request;
 - execute the deterministic asset tool;
 - invoke the same model again with the returned images;
@@ -663,7 +711,7 @@ Tests with a scripted fake model:
 - exactly zero or one deterministic tool execution;
 - all raw responses and tool traces survive failure.
 
-### 11.6 Candidate commit 3C - verify the real multimodal protocol
+### 11.7 Candidate commit 3D - verify the real multimodal protocol
 
 Suggested message:
 
@@ -684,8 +732,18 @@ The user runs the probe manually against the institutional endpoint. The repo
 contains the reproducible probe and redacted observations, not credentials or
 unreviewed output dumps.
 
-### 11.7 Phase 3 completion gate
+### 11.8 Phase 3 completion gate
 
+- separate post-conversion extraction produces figure images and one small
+  manifest in `figures/`, with source-page links and safe resolution metadata;
+- association recovery and label matching preserve provenance and explicit
+  missing or ambiguous outcomes, including initially uncaptioned candidates;
+- manual visual review accepts representative crops, complete compound
+  figures, and caption associations; rendering settings and recovery limits
+  are validated or their limitations recorded;
+- end-to-end latency is measured, with Docling local inference and rendering
+  reported separately from endpoint calls and tool execution;
+- figure, page, and mixed requests resolve safely from the minimal catalogue;
 - a fake-model integration proves both one-call and two-call paths;
 - the real endpoint protocol is measured for at least one eligible multimodal
   candidate;
@@ -694,9 +752,10 @@ unreviewed output dumps.
 - exact asset and model-call traces are preserved;
 - the implementation is a small explicit controller, not a general agent
   framework;
+- local tests and lint pass; no scientific agents or final-output work is added;
 - the branch is merged and deleted.
 
-### 11.8 Learning outcome
+### 11.9 Learning outcome
 
 The user should be able to trace the complete conversation from first model
 turn, through deterministic tool execution, to the second model turn and
@@ -764,7 +823,7 @@ feat(architecture): generate an evidence-grounded report
 Behaviour:
 
 - validate the Phase 3 consumer boundary before calling the model;
-- send complete Markdown, accepted package metadata, the focused role, and the
+- send complete Markdown, the minimal visual catalogue, the focused role, and the
   asset tool;
 - execute the bounded one-round interaction from Phase 3;
 - require selection evidence or explicit selection ambiguity;
@@ -902,7 +961,7 @@ Behaviour:
 
 - load only the package accepted through the Phase 3 consumer boundary, not the
   architecture report;
-- send complete Markdown, accepted package metadata, focused role, and asset
+- send complete Markdown, the minimal visual catalogue, focused role, and asset
   tool;
 - use the same bounded interaction protocol;
 - inventory all reported result categories, designs, variants, setups, and
@@ -915,7 +974,7 @@ Behaviour:
 Tests with fake clients:
 
 - text/table-only result report without tool use;
-- graph inspection through an exact full-page asset request;
+- graph inspection through exact figure requests and full-page fallback;
 - measured and simulated trace separation;
 - multiple variants and setup associations;
 - image-only result preservation;
@@ -1191,13 +1250,15 @@ Normal order:
 
 1. initialize the run and preserve the PDF;
 2. render ordered pages;
-3. make `B` sequential NuExtract3 batch calls and validate the package boundary
-   accepted for downstream consumption;
-4. execute the architecture agent;
-5. execute the results agent;
-6. canonicalize when both reports are valid;
-7. validate and write the two final JSON files;
-8. print run location, outputs, statuses, model calls, and tool executions.
+3. make `B` sequential NuExtract3 batch calls and persist complete Markdown;
+4. extract figures from the preserved PDF using Markdown captions, then
+   validate the figure and page catalogue for downstream consumption;
+5. execute the architecture agent;
+6. execute the results agent;
+7. canonicalize when both reports are valid;
+8. validate and write the two final JSON files;
+9. print run location, outputs, statuses, model calls, tool executions, and
+   end-to-end latency including separate local preprocessing costs.
 
 The scheduler is sequential. Architecture and results are independent after the
 document package: a failure in one may still allow the other to run, but
@@ -1323,7 +1384,7 @@ For each paper, record expected assertions at four boundaries:
 **Document package**
 
 - sections, tables, equations, and captions that must be present;
-- required full-page visual evidence;
+- required figure evidence, caption associations, and full-page fallback;
 - page and asset traceability;
 - known conversion limitations.
 
@@ -1444,7 +1505,7 @@ scripted fake responses for:
 - OpenAI-compatible response parsing;
 - raw-response, trace, and failure preservation;
 - final Markdown assembly only after complete success;
-- consumer-specific package validation when Phase 3 defines it;
+- figure extraction, caption association, and consumer-specific validation;
 - asset resolution and limits;
 - one-round agent interaction;
 - report-boundary validation;
@@ -1516,11 +1577,12 @@ The dependency structure is intentionally small:
 
 ```text
 Run lifecycle
-    -> DocumentPackage
-        -> Architecture report
-        -> Results report
-            -> Canonical combined response
-                -> Two final JSON files
+    -> Document conversion and complete Markdown
+        -> Figure extraction from preserved PDF
+            -> Accepted DocumentPackage and minimal figure/page catalogue
+                -> Architecture report and independent Results report
+                    -> Canonical combined response (requires both reports)
+                        -> Two final JSON files
 ```
 
 Architecture and results share the document package but not one another. The
@@ -1683,7 +1745,7 @@ The first v3 baseline is complete only when all of the following are true.
 
 ### Document preservation
 
-- one paper produces the Phase 1 and Phase 2 `DocumentPackage` artefact set;
+- one paper produces the Phase 1 and Phase 2 artefacts plus Phase 3 figures;
 - the complete Markdown preserves prose, tables, equations, and captions;
 - no table or equation crops exist;
 - full-page visual assets and page identity are recorded in
@@ -1691,13 +1753,14 @@ The first v3 baseline is complete only when all of the following are true.
 - `B = ceil(page_count / 8)` sequential conversions cover every page exactly
   once and in source order;
 - conversion traces and raw responses are inspectable;
-- safe asset resolution and consumer-specific validation are added when Phase
-  3 defines their consumer boundary.
+- figures and their caption associations pass manual visual review;
+- the minimal figure/page catalogue supports safe asset resolution;
+- end-to-end latency includes measured Docling inference and rendering costs.
 
 ### Scientific agents
 
 - architecture and results operate independently from the same package;
-- each initially receives complete Markdown and the accepted package metadata;
+- each initially receives complete Markdown and the minimal visual catalogue;
 - each uses zero or one deterministic asset-tool execution;
 - each produces a readable evidence report;
 - every material claim has evidence or an explicit uncertainty state;
@@ -1738,14 +1801,15 @@ The first v3 baseline is complete only when all of the following are true.
 
 Phase 1 is complete and was integrated into `main` with squash merge
 `9691dd69e622be0b3606028819308f240c00dd12`. Phase 2 implementation is complete
-on `feat/document-package` and has been merged into `main` with squash merge `d88ba548f32254edd97ba10f7c90e4e74393d083`.
+and was merged into `main` with squash merge
+`d88ba548f32254edd97ba10f7c90e4e74393d083`.
 
 Next steps:
 
-1. Finish the Phase 2 documentation and final repository checks.
-2. Let the repository owner review and merge Phase 2.
-3. Begin Phase 3 only after the Phase 2 contract is accepted.
+1. Implement the separate post-conversion figure-extraction increment in 11.4.
+2. Review crops and associations manually and measure end-to-end latency.
+3. Proceed to safe asset resolution and bounded inspection in separate increments.
 
-Do not record an accepted Phase 2 merge SHA until the merge exists. Phase 3
-must inspect the merged implementation and define safe asset resolution and
-consumer-specific validation from a concrete consumer need.
+Phase 3 remains not started in executable code. This documentation batch
+records agreed decisions only; it does not implement scientific agents,
+canonicalization, or final outputs.

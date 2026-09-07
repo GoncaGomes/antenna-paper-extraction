@@ -41,13 +41,15 @@ pipeline**:
 
 1. NuExtract3 converts the complete ordered page sequence into a
    loss-preserving `DocumentPackage` through sequential batches.
-2. An architecture agent reads the complete Markdown and requests only the
+2. A separate figure-extraction step uses the converted Markdown and preserved
+   PDF to prepare figure assets and a minimal visual catalogue.
+3. An architecture agent reads the complete Markdown and requests only the
    visual assets it needs.
-3. A results agent independently reads the same package and requests only the
+4. A results agent independently reads the same package and requests only the
    visual assets it needs.
-4. A canonicalization model organizes the two evidence reports into a shallow,
+5. A canonicalization model organizes the two evidence reports into a shallow,
    flexible final contract.
-5. Deterministic code validates the contract and splits it into two final JSON
+6. Deterministic code validates the contract and splits it into two final JSON
    documents.
 
 The difficult scientific tasks are separated by purpose. The architecture
@@ -192,11 +194,17 @@ NuExtract3 document-conversion phase
   - consecutive batches of up to 8 pages
     |
     v
+Separate figure extraction (planned Phase 3)
+  - reads document_conversion/document.md and the preserved PDF
+  - Docling local layout inference; pypdfium2 region rendering
+    |
+    v
 DocumentPackage
   - source PDF
   - source manifest and lifecycle status
   - pages/pages.json
   - complete document.md
+  - figures/ images and one small JSON manifest
   - ordered page images as visual fallback
   - per-batch raw responses
   - per-batch traces for successful parses
@@ -205,8 +213,8 @@ DocumentPackage
     |                              |
     v                              v
 Architecture agent run            Results agent run
-  reads Markdown and package        reads Markdown and package
-  metadata                          metadata
+  reads complete Markdown           reads complete Markdown
+  and minimal visual catalogue      and minimal visual catalogue
   may request exact assets           may request exact assets
   writes evidence report             writes evidence report
     |                              |
@@ -305,10 +313,38 @@ does not insert page ID markers. Page identity remains in `pages/pages.json`.
 
 ### 8.5 Figure policy
 
-The current phase does not materialize separate figure files. Rendered
-full-page images are the available visual fallback. Separate figure
-materialization remains deferred until evidence shows that a concrete consumer
-needs it.
+Phase 2 does not materialize figure files. Phase 3 explicitly replaces the
+page-only consumer boundary with preferred figure assets and full-page
+fallback. Figure extraction is a separate step after document conversion,
+because it reads `document_conversion/document.md`; it is not part of
+`render-pages`.
+
+The intended run has sibling `input/`, `pages/`, `document_conversion/`, and
+`figures/` directories. `figures/` contains images and one small JSON manifest;
+its exact filename and schema are left to implementation.
+
+Docling detects figure regions and captions. Prefer its existing caption
+associations. Retain uncaptioned image candidates until association recovery
+has been attempted. Recovery may use a conservative geometric rule only for
+an unambiguous match on the same page. This limited rule requires validation;
+selection is structural, never based on scientific relevance.
+
+Match figures to Markdown captions by their original label, such as “Fig. 8”,
+never by crop index or file order. Use the Markdown caption only when the
+match is unique and coherent. Preserve the original Docling caption and
+association provenance, and record missing or ambiguous matches explicitly.
+
+Use pypdfium2 to render regions from the preserved original PDF, not the
+existing 170-DPI page PNGs. Render each required page once per figure-extraction
+execution and reuse it for its regions. Keep complete compound figures
+together; do not create table or equation crops. Preserve the source-page
+relationship and metadata needed for safe asset resolution.
+
+Scale 3.0 and a 2-point margin worked in the reported experiments. They are
+initial settings to validate, not accepted production defaults. These findings
+are experimental evidence, not implemented repository capabilities. Manual
+visual review of crops and associations and end-to-end latency measurement,
+including local layout inference and rendering, are required for acceptance.
 
 ### 8.6 Manifest policy
 
@@ -341,19 +377,18 @@ Passing every page image to every agent increases context pressure and makes it
 harder to know which visual evidence influenced the answer. Passing no images
 would make geometry and graph interpretation unreliable.
 
-The compromise is to give each agent the complete Markdown and the package
-metadata required by its consumer, then let it request specific full-page
-assets when the text is insufficient. Separate figure assets may be added only
-if Phase 3 evidence justifies them.
+Each future scientific agent receives the complete Markdown and a minimal
+visual catalogue with declared figure and page IDs, captions and source-page
+links where available. Figures are preferred; full pages remain available as
+fallback when the text or figure assets are insufficient.
 
 ### 9.2 Tool responsibility
 
 The asset tool is deterministic. It:
 
-- receives exact page asset identifiers declared in `pages/pages.json`;
+- receives exact figure IDs and/or page IDs declared in the run manifests;
 - checks that the request is valid and within configured limits;
-- loads the corresponding full pages, plus separate figures only if a later
-  evidence-based increment adds them;
+- loads the corresponding figures and/or full pages;
 - returns the images with their source metadata in stable order;
 - records the request, selected assets, and hashes.
 
@@ -378,8 +413,8 @@ by implementation code.
 This design has one **logical agent run** for architecture and one for results.
 However, a tool-based run normally contains two model inference turns:
 
-1. the model reads `document.md` and the accepted package metadata, then emits
-   a tool request;
+1. the model reads complete `document.md` and the minimal visual catalogue,
+   then emits a tool request;
 2. deterministic code executes the tool and returns the images;
 3. the same model is invoked again with the tool result and emits the report.
 
@@ -400,8 +435,7 @@ images.
 The agent initially receives only:
 
 - the complete `document.md`;
-- the source and pages manifests, or the consumer-specific package view defined
-  in Phase 3;
+- the minimal visual catalogue defined in Phase 3;
 - a focused architecture role and reporting template;
 - access to the bounded asset-inspection tool.
 
@@ -447,7 +481,7 @@ Evidence may refer to:
 
 - a Markdown section and a short source-faithful excerpt;
 - a table or equation label represented in the Markdown;
-- a full-page asset identifier from `pages/pages.json`;
+- a figure or full-page asset identifier from the accepted manifests;
 - a caption and source page;
 - multiple sources when a claim depends on their combination.
 
@@ -462,8 +496,7 @@ The results agent receives the same initial source interface as the
 architecture agent:
 
 - the complete `document.md`;
-- the source and pages manifests, or the consumer-specific package view defined
-  in Phase 3;
+- the minimal visual catalogue defined in Phase 3;
 - a focused results role and reporting template;
 - access to the bounded asset-inspection tool.
 
@@ -633,6 +666,10 @@ of model calls and tool executions.
 No reviewer, repair, retry, fallback, or hidden visual-model call is included
 in this budget.
 
+Docling's local layout inference is a separate, explicit preprocessing cost,
+outside this endpoint-call budget and outside the deterministic inspection
+tool. Record its cost separately and include it in end-to-end latency.
+
 ## 15. Evidence, provenance, and auditability
 
 The implemented Phase 2 trace records the requested model, temperature, mode,
@@ -697,7 +734,7 @@ only one commit is implemented and reviewed at a time.
 | 0 | `00 - Foundation and project rules` | Clean repository, authority rules, and executable development baseline |
 | 1 | `01 - Run lifecycle and source preservation` | Deterministic run, PDF identity, ordered page renders, and failures |
 | 2 | `02 - NuExtract3 DocumentPackage` | Ordered page renders, combined Markdown, per-batch diagnostics, and lifecycle state |
-| 3 | `03 - Bounded asset inspection` | Consumer-specific package validation, safe asset resolution, and one-round agent control |
+| 3 | `03 - Bounded asset inspection` | Post-conversion figure extraction, minimal visual catalogue, safe asset resolution, and one-round agent control |
 | 4 | `04 - Architecture agent` | Evidence-grounded architecture Markdown report |
 | 5 | `05 - Results agent` | Evidence-grounded results Markdown report |
 | 6 | `06 - Canonicalization and final contracts` | Shallow combined response, claim accounting, and two JSON outputs |
@@ -722,13 +759,14 @@ without new empirical evidence:
 - join successful batch Markdown mechanically with two newline characters;
 - keep tables and equations in `document.md`;
 - do not create table or equation crops;
-- use rendered full-page images as the current visual fallback;
+- extract figures after conversion using Docling and the preserved PDF as
+  specified in section 8.5; prefer figures and retain full-page fallback;
 - maintain page identity in `pages/pages.json`, not model-generated Markdown
   markers;
 - persist each received raw response before parsing and write a trace only
   after a successful parse;
 - write final Markdown only after all batches succeed;
-- initially pass `document.md` and the required package metadata to each
+- initially pass complete `document.md` and the minimal visual catalogue to each
   scientific agent;
 - let each agent request exact visual assets through a deterministic tool;
 - allow at most one asset-tool round per scientific agent in the baseline;
@@ -746,8 +784,8 @@ without new empirical evidence:
 The following are decided in their named phase, from tests and benchmark
 evidence:
 
-- whether separate figure materialization provides enough value for a concrete
-  consumer;
+- the figure manifest filename and minimal schema;
+- validated geometric recovery parameters and figure rendering settings;
 - the consumer-specific validation boundary for package artefacts;
 - the minimal package view needed for safe asset routing;
 - the endpoint's tool-call and image-result protocol;
@@ -771,9 +809,9 @@ An implementation conforms to v3 only if all of the following remain true:
    source order.
 2. Tables and equations are not routed through a second crop/OCR path.
 3. Architecture and results agents initially see the complete Markdown and
-   the package metadata required by their accepted consumer boundary.
+   the minimal visual catalogue required by their accepted consumer boundary.
 4. Visual asset selection is performed by the requesting agent using exact
-   page asset identifiers.
+   figure IDs and/or page IDs in one round.
 5. The asset tool is deterministic and does not hide another model call.
 6. Each scientific agent has at most one tool round in the baseline.
 7. Scientific reports precede final JSON serialization.
@@ -792,7 +830,7 @@ An implementation conforms to v3 only if all of the following remain true:
 The v3 baseline is architecturally successful when a representative paper can
 be processed into:
 
-- a human-reviewable `DocumentPackage` made from the existing run artefacts;
+- a human-reviewable `DocumentPackage` with Markdown, figures, and page fallback;
 - an architecture report whose claims resolve to text or requested visual
   evidence;
 - a results report that preserves variants, setups, and result origins;
