@@ -1,5 +1,11 @@
 import re
 from html.parser import HTMLParser
+from pathlib import Path
+
+from docling.datamodel.base_models import ConversionStatus, InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling_core.types.doc import DoclingDocument, PictureItem
 
 
 def extract_figure_label(caption: str) -> str | None:
@@ -75,3 +81,53 @@ def group_captions_by_label(
             grouped.setdefault(label, []).append(caption)
 
     return grouped, unrecognized
+
+
+def load_docling_document(pdf_path: Path) -> DoclingDocument:
+    pdf_path = Path(pdf_path)
+
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF does not exist: {pdf_path}")
+
+    if not pdf_path.is_file():
+        raise IsADirectoryError(f"PDF path is not a file: {pdf_path}")
+
+    pipeline_options = PdfPipelineOptions(
+        images_scale=3.0,
+        generate_picture_images=False,
+        generate_page_images=False,
+    )
+
+    converter = DocumentConverter(
+        allowed_formats=[InputFormat.PDF],
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options,
+            ),
+        },
+    )
+
+    result = converter.convert(pdf_path)
+
+    if result.status != ConversionStatus.SUCCESS:
+        details = "; ".join(error.error_message for error in result.errors)
+        raise RuntimeError(
+            f"Docling conversion did not complete successfully: "
+            f"{result.status.value}. {details}"
+        )
+
+    return result.document
+
+
+def collect_figure_candidates(
+    document: DoclingDocument,
+) -> list[PictureItem]:
+    candidates: list[PictureItem] = []
+
+    for item, _level in document.iterate_items():
+        if not isinstance(item, PictureItem):
+            continue
+
+        candidates.append(item)
+
+    return candidates
