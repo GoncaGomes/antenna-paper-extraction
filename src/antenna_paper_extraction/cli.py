@@ -15,6 +15,7 @@ from antenna_paper_extraction.document import convert_document_to_markdown
 from antenna_paper_extraction.model_client import OpenAICompatibleClient
 from antenna_paper_extraction.pages import render_pdf_pages
 from antenna_paper_extraction.runs import create_run
+from antenna_paper_extraction.figures import extract_figures
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +95,32 @@ def build_parser() -> argparse.ArgumentParser:
         "run_dir", type=Path, help="Existing run directory with rendered pages"
     )
 
+    extract_figures_parser = subparser.add_parser(
+        "extract-figures",
+        help="Extract figures from a converted run",
+        description=(
+            "Detect figure regions with Docling and render crops from "
+            "the preserved PDF, using converted Markdown captions."
+        ),
+    )
+    extract_figures_parser.add_argument(
+        "run_dir",
+        type=Path,
+        help="Existing run directory with successful document conversion",
+    )
+    extract_figures_parser.add_argument(
+        "--scale",
+        type=float,
+        default=3.0,
+        help="PDFium rendering scale (default: 3.0, approximately 216 DPI)",
+    )
+    extract_figures_parser.add_argument(
+        "--margin-pt",
+        type=float,
+        default=2.0,
+        help="Crop margin in PDF points (default: 2.0)",
+    )
+
     return parser
 
 
@@ -150,8 +177,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Converted document: {document_path.resolve()}")
         return 0
 
+    if args.command == "extract-figures":
+            try:
+                manifest_path = extract_figures(
+                    run_dir=args.run_dir,
+                    scale=args.scale,
+                    margin_pt=args.margin_pt,
+                )
+            except (OSError, ValueError, RuntimeError, pdfium.PdfiumError) as error:
+                print(f"Failed to extract figures. {error}", file=sys.stderr)
+                return 1
+    
+            print(f"Figure manifest: {manifest_path.resolve()}")
+            return 0
+
     parser.error(f"unrecognized command: {args.command}")
     return 2
+
 
 
 if __name__ == "__main__":

@@ -474,3 +474,128 @@ def _document_extractor_environment() -> dict[str, str]:
         "DOCUMENT_EXTRACTOR_MODEL": "nuextract3",
         "DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS": "600",
     }
+
+
+def test_extract_figures_help_uses_public_cli_names(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exception:
+        cli.main(["extract-figures", "--help"])
+
+    captured = capsys.readouterr()
+
+    assert exception.value.code == 0
+    assert "usage: antenna-extract extract-figures" in captured.out
+    assert "run_dir" in captured.out
+    assert "--scale" in captured.out
+    assert "--margin-pt" in captured.out
+    assert "--margin_pt" not in captured.out
+    assert captured.err == ""
+
+
+def test_extract_figures_requires_run_directory(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exception:
+        cli.main(["extract-figures"])
+
+    captured = capsys.readouterr()
+
+    assert exception.value.code == 2
+    assert captured.out == ""
+    assert "run_dir" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_scale", "expected_margin"),
+    [
+        ([], 3.0, 2.0),
+        (["--scale", "2.5", "--margin-pt", "1.0"], 2.5, 1.0),
+    ],
+)
+def test_extract_figures_calls_extraction_and_reports_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    options: list[str],
+    expected_scale: float,
+    expected_margin: float,
+) -> None:
+    run_dir = tmp_path / "runs" / "run_test"
+    manifest_path = run_dir / "figures" / "manifest.json"
+
+    extraction = Mock(return_value=manifest_path)
+    openai_constructor = Mock()
+    dotenv_loader = Mock()
+
+    monkeypatch.setattr(cli, "extract_figures", extraction)
+    monkeypatch.setattr(cli, "OpenAI", openai_constructor)
+    monkeypatch.setattr(cli, "load_dotenv", dotenv_loader)
+
+    exit_code = cli.main(
+        ["extract-figures", str(run_dir), *options]
+    )
+
+    extraction.assert_called_once_with(
+        run_dir=run_dir,
+        scale=expected_scale,
+        margin_pt=expected_margin,
+    )
+    openai_constructor.assert_not_called()
+    dotenv_loader.assert_not_called()
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == (
+        f"Figure manifest: {manifest_path.resolve()}\n"
+    )
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("Synthetic file failure."),
+        ValueError("Synthetic validation failure."),
+        RuntimeError("Synthetic Docling failure."),
+        cli.pdfium.PdfiumError("Synthetic PDFium failure."),
+    ],
+)
+def test_extract_figures_reports_expected_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+) -> None:
+    run_dir = tmp_path / "runs" / "run_test"
+    extraction = Mock(side_effect=error)
+
+    monkeypatch.setattr(cli, "extract_figures", extraction)
+
+    exit_code = cli.main(["extract-figures", str(run_dir)])
+
+    extraction.assert_called_once_with(
+        run_dir=run_dir,
+        scale=3.0,
+        margin_pt=2.0,
+    )
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == f"Failed to extract figures. {error}\n"
+
+
+def test_extract_figures_does_not_hide_type_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extraction = Mock(
+        side_effect=TypeError("Synthetic programming error.")
+    )
+    monkeypatch.setattr(cli, "extract_figures", extraction)
+
+    with pytest.raises(TypeError, match="Synthetic programming error"):
+        cli.main(["extract-figures", str(tmp_path / "run_test")])
