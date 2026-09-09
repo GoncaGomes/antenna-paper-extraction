@@ -368,3 +368,199 @@ def test_mark_page_rendering_failed_rejects_pending_state(
 def write_test_pdf(path: Path, content: bytes = PDF_CONTENT) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+
+
+@pytest.fixture
+def figure_ready_run(tmp_path: Path) -> Path:
+    source_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(source_pdf)
+
+    run_dir = runs.create_run(source_pdf, tmp_path / "runs")
+
+    runs.mark_page_rendering_running(run_dir)
+    runs.mark_page_rendering_succeeded(run_dir)
+    runs.mark_document_conversion_running(run_dir)
+    runs.mark_document_conversion_succeeded(run_dir)
+
+    return run_dir
+
+
+def test_load_run_status_accepts_missing_figure_extraction(
+    figure_ready_run: Path,
+) -> None:
+    status_path = figure_ready_run / "status.json"
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+    del payload["phases"]["figure_extraction"]
+
+    status_path.write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    status = runs.load_run_status(figure_ready_run)
+
+    assert status.phases.figure_extraction == runs.PhaseStatus(state="pending")
+    assert status.phases.document_conversion.state == "succeeded"
+
+    runs.mark_figure_extraction_running(figure_ready_run)
+
+    persisted = json.loads(status_path.read_text(encoding="utf-8"))
+
+    assert persisted["phases"]["figure_extraction"]["state"] == "running"
+
+
+@pytest.mark.parametrize("outcome", ["succeeded", "failed"])
+def test_figure_extraction_lifecycle_persists_transitions(
+    figure_ready_run: Path,
+    outcome: str,
+) -> None:
+    initial = runs.load_run_status(figure_ready_run)
+
+    assert initial.phases.figure_extraction.state == "pending"
+
+    running = runs.mark_figure_extraction_running(figure_ready_run)
+
+    assert runs.load_run_status(figure_ready_run) == running
+    assert running.phases.figure_extraction.state == "running"
+    assert running.phases.figure_extraction.started_at is not None
+    assert running.phases.figure_extraction.finished_at is None
+    assert running.phases.figure_extraction.error is None
+
+    with pytest.raises(ValueError, match="pending state"):
+        runs.mark_figure_extraction_running(figure_ready_run)
+
+    failure = runs.PhaseFailure(
+        type="RuntimeError",
+        message="Synthetic figure extraction failure.",
+    )
+
+    if outcome == "succeeded":
+        completed = runs.mark_figure_extraction_succeeded(figure_ready_run)
+    else:
+        completed = runs.mark_figure_extraction_failed(
+            figure_ready_run,
+            failure,
+        )
+
+    phase = completed.phases.figure_extraction
+
+    assert runs.load_run_status(figure_ready_run) == completed
+    assert phase.state == outcome
+    assert phase.started_at == running.phases.figure_extraction.started_at
+    assert phase.finished_at is not None
+    assert phase.finished_at >= phase.started_at
+    assert phase.error == (failure if outcome == "failed" else None)
+
+    assert completed.phases.source_preservation == initial.phases.source_preservation
+    assert completed.phases.page_rendering == initial.phases.page_rendering
+    assert completed.phases.document_conversion == initial.phases.document_conversion
+
+    with pytest.raises(ValueError, match="pending state"):
+        runs.mark_figure_extraction_running(figure_ready_run)
+
+    assert runs.load_run_status(figure_ready_run) == completed
+
+
+def test_figure_extraction_requires_successful_document_conversion(
+    tmp_path: Path,
+) -> None:
+    source_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(source_pdf)
+
+    run_dir = runs.create_run(source_pdf, tmp_path / "runs")
+    initial = runs.load_run_status(run_dir)
+
+    with pytest.raises(ValueError, match="Document conversion must succeed"):
+        runs.mark_figure_extraction_running(run_dir)
+
+    assert runs.load_run_status(run_dir) == initial
+
+
+@pytest.mark.parametrize("outcome", ["succeeded", "failed"])
+def test_figure_extraction_cannot_finish_before_starting(
+    figure_ready_run: Path,
+    outcome: str,
+) -> None:
+    initial = runs.load_run_status(figure_ready_run)
+
+    with pytest.raises(ValueError, match="running state"):
+        if outcome == "succeeded":
+            runs.mark_figure_extraction_succeeded(figure_ready_run)
+        else:
+            runs.mark_figure_extraction_failed(
+                figure_ready_run,
+                runs.PhaseFailure(
+                    type="RuntimeError",
+                    message="Synthetic failure.",
+                ),
+            )
+
+    assert runs.load_run_status(figure_ready_run) == initial
+
+
+@pytest.mark.parametrize(
+    ("phase_name", "transition"),
+    [
+        ("page_rendering", "running"),
+        ("page_rendering", "succeeded"),
+        ("page_rendering", "failed"),
+        ("document_conversion", "running"),
+        ("document_conversion", "succeeded"),
+        ("document_conversion", "failed"),
+    ],
+)
+def test_existing_transitions_preserve_other_phase_states(
+    tmp_path: Path,
+    phase_name: str,
+    transition: str,
+) -> None:
+    source_pdf = tmp_path / "paper.pdf"
+    write_test_pdf(source_pdf)
+    run_dir = runs.create_run(source_pdf, tmp_path / "runs")
+
+    if phase_name == "document_conversion":
+        runs.mark_page_rendering_running(run_dir)
+        runs.mark_page_rendering_succeeded(run_dir)
+
+    if transition != "running":
+        start_phase = getattr(runs, f"mark_{phase_name}_running")
+        start_phase(run_dir)
+
+    current = runs.load_run_status(run_dir)
+
+    sentinel = runs.PhaseStatus(
+        state="running",
+        started_at=current.phases.source_preservation.started_at,
+    )
+
+    payload = current.model_dump(mode="json")
+    payload["phases"]["figure_extraction"] = sentinel.model_dump(mode="json")
+
+    if phase_name == "page_rendering":
+        payload["phases"]["document_conversion"] = sentinel.model_dump(mode="json")
+
+    (run_dir / "status.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    change_phase = getattr(runs, f"mark_{phase_name}_{transition}")
+
+    if transition == "failed":
+        change_phase(
+            run_dir,
+            runs.PhaseFailure(
+                type="RuntimeError",
+                message="Synthetic upstream failure.",
+            ),
+        )
+    else:
+        change_phase(run_dir)
+
+    updated = runs.load_run_status(run_dir)
+
+    assert updated.phases.figure_extraction == sentinel
+
+    if phase_name == "page_rendering":
+        assert updated.phases.document_conversion == sentinel
