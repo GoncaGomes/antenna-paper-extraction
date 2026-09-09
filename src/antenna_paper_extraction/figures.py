@@ -1,5 +1,6 @@
 import io
 import re
+from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
@@ -15,8 +16,10 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc import (
     BoundingBox,
     CoordOrigin,
+    DocItemLabel,
     DoclingDocument,
     PictureItem,
+    TextItem,
 )
 from PIL import Image
 
@@ -32,6 +35,14 @@ from antenna_paper_extraction.runs import (
 )
 
 DOCLING_IMAGES_SCALE = 3.0
+MAX_CAPTION_DISTANCE_PT = 30.0
+MIN_CAPTION_WIDTH_OVERLAP = 0.8
+
+
+@dataclass(frozen=True)
+class FigureCaptionRecovery:
+    caption: TextItem
+    distance_pt: float
 
 
 @dataclass(frozen=True)
@@ -40,6 +51,7 @@ class FigureCaptionAssociation:
     markdown_captions: tuple[str, ...]
     pictures: tuple[PictureItem, ...]
     unresolved_reason: str | None
+    caption_recovery: FigureCaptionRecovery | None = None
 
 
 @dataclass(frozen=True)
@@ -177,12 +189,20 @@ def collect_figure_candidates(
 def group_figure_candidates_by_label(
     document: DoclingDocument,
     candidates: list[PictureItem],
+    *,
+    caption_recoveries: dict[str, FigureCaptionRecovery] | None = None,
 ) -> tuple[dict[str, list[PictureItem]], list[PictureItem]]:
     grouped: dict[str, list[PictureItem]] = {}
     unrecognized: list[PictureItem] = []
+    recoveries = caption_recoveries if caption_recoveries is not None else {}
 
     for picture in candidates:
         caption = picture.caption_text(document)
+        recovery = recoveries.get(picture.self_ref)
+
+        if not caption.strip() and recovery is not None:
+            caption = recovery.caption.text
+
         label = extract_figure_label(caption)
 
         if label is None:
@@ -204,8 +224,12 @@ def associate_figure_captions(
     markdown_by_label, unrecognized_captions = group_captions_by_label(
         markdown_captions
     )
+    caption_recoveries = recover_figure_captions(document, candidates)
+
     pictures_by_label, unrecognized_pictures = group_figure_candidates_by_label(
-        document, candidates
+        document,
+        candidates,
+        caption_recoveries=caption_recoveries,
     )
 
     associations: list[FigureCaptionAssociation] = []
@@ -231,6 +255,11 @@ def associate_figure_captions(
                 markdown_captions=tuple(captions),
                 pictures=tuple(pictures),
                 unresolved_reason=reason,
+                caption_recovery=(
+                    caption_recoveries.get(pictures[0].self_ref)
+                    if len(pictures) == 1
+                    else None
+                ),
             )
         )
 
@@ -544,6 +573,26 @@ def _build_figure_manifest_entries(
                 }
             )
 
+        recovery = association.caption_recovery
+        recovery_details = None
+        association_method = None
+
+        if unique_association:
+            association_method = (
+                "geometric_recovery" if recovery is not None else "docling"
+            )
+
+        if recovery is not None:
+            recovery_details = {
+                "docling_ref": recovery.caption.self_ref,
+                "text": recovery.caption.text,
+                "positions": [
+                    provenance.model_dump(mode="json")
+                    for provenance in recovery.caption.prov
+                ],
+                "distance_pt": recovery.distance_pt,
+            }
+
         entries.append(
             {
                 "figure_id": figure_id,
@@ -551,7 +600,8 @@ def _build_figure_manifest_entries(
                 "relative_path": result.relative_path,
                 "caption": caption,
                 "caption_source": "markdown" if caption is not None else None,
-                "association_method": ("docling" if unique_association else None),
+                "association_method": association_method,
+                "caption_recovery": recovery_details,
                 "markdown_captions": list(association.markdown_captions),
                 "candidates": candidates,
                 "unresolved_reason": result.unresolved_reason,
@@ -683,3 +733,125 @@ def extract_figures(
         raise
 
     return manifest_path
+
+
+def calculate_caption_distance(
+    caption: TextItem,
+    picture: PictureItem,
+) -> float | None:
+    if len(caption.prov) != 1 or len(picture.prov) != 1:
+        return None
+
+    caption_position = caption.prov[0]
+    picture_position = picture.prov[0]
+
+    if caption_position.page_no != picture_position.page_no:
+        return None
+
+    caption_box = caption_position.bbox
+    figure_box = picture_position.bbox
+
+    if (
+        caption_box.coord_origin != CoordOrigin.BOTTOMLEFT
+        or figure_box.coord_origin != CoordOrigin.BOTTOMLEFT
+    ):
+        return None
+
+    coordinates = (
+        caption_box.l,
+        caption_box.t,
+        caption_box.r,
+        caption_box.b,
+        figure_box.l,
+        figure_box.t,
+        figure_box.r,
+        figure_box.b,
+    )
+
+    if not all(isfinite(value) for value in coordinates):
+        return None
+
+    if (
+        caption_box.l >= caption_box.r
+        or caption_box.b >= caption_box.t
+        or figure_box.l >= figure_box.r
+        or figure_box.b >= figure_box.t
+    ):
+        return None
+
+    distance = figure_box.b - caption_box.t
+
+    if not 0 <= distance <= MAX_CAPTION_DISTANCE_PT:
+        return None
+
+    caption_width = caption_box.r - caption_box.l
+    overlap = max(
+        0.0,
+        min(caption_box.r, figure_box.r) - max(caption_box.l, figure_box.l),
+    )
+
+    if overlap / caption_width < MIN_CAPTION_WIDTH_OVERLAP:
+        return None
+
+    return distance
+
+
+def recover_figure_captions(
+    document: DoclingDocument,
+    candidates: list[PictureItem],
+) -> dict[str, FigureCaptionRecovery]:
+    captions = [
+        text
+        for text in document.texts
+        if text.label == DocItemLabel.CAPTION
+        and extract_figure_label(text.text) is not None
+    ]
+
+    label_counts = Counter(extract_figure_label(caption.text) for caption in captions)
+
+    existing_labels = {
+        extract_figure_label(picture.caption_text(document)) for picture in candidates
+    }
+    linked_caption_refs = {
+        reference.cref for picture in candidates for reference in picture.captions
+    }
+
+    pairs: list[tuple[TextItem, PictureItem, float]] = []
+
+    for caption in captions:
+        for picture in candidates:
+            distance = calculate_caption_distance(caption, picture)
+
+            if distance is not None:
+                pairs.append((caption, picture, distance))
+
+    caption_counts = Counter(caption.self_ref for caption, _picture, _distance in pairs)
+    picture_counts = Counter(picture.self_ref for _caption, picture, _distance in pairs)
+
+    recoveries: dict[str, FigureCaptionRecovery] = {}
+
+    for caption, picture, distance in pairs:
+        label = extract_figure_label(caption.text)
+
+        if picture.captions or picture.caption_text(document).strip():
+            continue
+
+        if caption.self_ref in linked_caption_refs:
+            continue
+
+        if label in existing_labels:
+            continue
+
+        if (
+            label_counts[label] != 1
+            or caption_counts[caption.self_ref] != 1
+            or picture_counts[picture.self_ref] != 1
+        ):
+            continue
+
+        recoveries[picture.self_ref] = FigureCaptionRecovery(
+            caption=caption,
+            distance_pt=distance,
+        )
+
+    return recoveries

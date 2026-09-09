@@ -532,9 +532,7 @@ def test_extract_figures_calls_extraction_and_reports_manifest(
     monkeypatch.setattr(cli, "OpenAI", openai_constructor)
     monkeypatch.setattr(cli, "load_dotenv", dotenv_loader)
 
-    exit_code = cli.main(
-        ["extract-figures", str(run_dir), *options]
-    )
+    exit_code = cli.main(["extract-figures", str(run_dir), *options])
 
     extraction.assert_called_once_with(
         run_dir=run_dir,
@@ -547,9 +545,7 @@ def test_extract_figures_calls_extraction_and_reports_manifest(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert captured.out == (
-        f"Figure manifest: {manifest_path.resolve()}\n"
-    )
+    assert captured.out == (f"Figure manifest: {manifest_path.resolve()}\n")
     assert captured.err == ""
 
 
@@ -592,9 +588,7 @@ def test_extract_figures_does_not_hide_type_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    extraction = Mock(
-        side_effect=TypeError("Synthetic programming error.")
-    )
+    extraction = Mock(side_effect=TypeError("Synthetic programming error."))
     monkeypatch.setattr(cli, "extract_figures", extraction)
 
     with pytest.raises(TypeError, match="Synthetic programming error"):

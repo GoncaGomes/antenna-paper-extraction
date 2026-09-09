@@ -15,6 +15,7 @@ from docling_core.types.doc import (
     PictureItem,
     ProvenanceItem,
     TableData,
+    TextItem,
 )
 from PIL import Image
 from pypdf import PdfWriter
@@ -1065,3 +1066,274 @@ def test_extract_figures_preserves_images_after_persistence_failure(
     assert phase.error.type == "OSError"
     assert expected_stage in phase.error.message
     assert status.phases.document_conversion.state == "succeeded"
+
+
+def _make_caption_recovery_document(
+    *,
+    caption_bbox: BoundingBox | None = None,
+    caption_page: int = 1,
+) -> tuple[DoclingDocument, PictureItem, TextItem]:
+    document = DoclingDocument(name="caption-recovery")
+
+    picture = document.add_picture()
+    picture.prov.append(
+        ProvenanceItem(
+            page_no=1,
+            bbox=BoundingBox(
+                l=20.0,
+                t=160.0,
+                r=80.0,
+                b=100.0,
+                coord_origin=CoordOrigin.BOTTOMLEFT,
+            ),
+            charspan=(0, 0),
+        )
+    )
+
+    if caption_bbox is None:
+        caption_bbox = BoundingBox(
+            l=20.0,
+            t=85.0,
+            r=80.0,
+            b=75.0,
+            coord_origin=CoordOrigin.BOTTOMLEFT,
+        )
+
+    caption = document.add_text(
+        label=DocItemLabel.CAPTION,
+        text="Fig. 8. Original Docling caption.",
+    )
+    caption.prov.append(
+        ProvenanceItem(
+            page_no=caption_page,
+            bbox=caption_bbox,
+            charspan=(0, len(caption.text)),
+        )
+    )
+
+    return document, picture, caption
+
+
+@pytest.mark.parametrize(
+    ("left", "top", "right", "bottom", "expected_distance"),
+    [
+        (20.0, 85.0, 80.0, 75.0, 15.0),
+        (20.0, 100.0, 80.0, 90.0, 0.0),
+        (20.0, 70.0, 80.0, 60.0, 30.0),
+        (20.0, 69.9, 80.0, 59.9, None),
+        (5.0, 85.0, 80.0, 75.0, 15.0),
+        (4.0, 85.0, 80.0, 75.0, None),
+        (20.0, 180.0, 80.0, 170.0, None),
+        (20.0, 110.0, 80.0, 100.0, None),
+    ],
+    ids=[
+        "caption-below-picture",
+        "zero-gap",
+        "maximum-gap",
+        "gap-too-large",
+        "minimum-overlap",
+        "insufficient-overlap",
+        "caption-above-picture",
+        "vertical-overlap",
+    ],
+)
+def test_calculate_caption_distance_checks_geometry(
+    left: float,
+    top: float,
+    right: float,
+    bottom: float,
+    expected_distance: float | None,
+) -> None:
+    bbox = BoundingBox(
+        l=left,
+        t=top,
+        r=right,
+        b=bottom,
+        coord_origin=CoordOrigin.BOTTOMLEFT,
+    )
+    _document, picture, caption = _make_caption_recovery_document(
+        caption_bbox=bbox,
+    )
+
+    distance = figures.calculate_caption_distance(caption, picture)
+
+    if expected_distance is None:
+        assert distance is None
+    else:
+        assert distance == pytest.approx(expected_distance)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["different_page", "top_left_coordinates"],
+)
+def test_calculate_caption_distance_rejects_unsupported_positions(
+    problem: str,
+) -> None:
+    caption_bbox = None
+    caption_page = 1
+
+    if problem == "different_page":
+        caption_page = 2
+    else:
+        caption_bbox = BoundingBox(
+            l=20.0,
+            t=115.0,
+            r=80.0,
+            b=125.0,
+            coord_origin=CoordOrigin.TOPLEFT,
+        )
+
+    _document, picture, caption = _make_caption_recovery_document(
+        caption_bbox=caption_bbox,
+        caption_page=caption_page,
+    )
+
+    assert figures.calculate_caption_distance(caption, picture) is None
+
+
+@pytest.mark.parametrize("target", ["caption", "picture"])
+@pytest.mark.parametrize("position_count", [0, 2])
+def test_calculate_caption_distance_requires_unique_positions(
+    target: str,
+    position_count: int,
+) -> None:
+    _document, picture, caption = _make_caption_recovery_document()
+    item = caption if target == "caption" else picture
+
+    if position_count == 0:
+        item.prov.clear()
+    else:
+        item.prov.append(item.prov[0].model_copy(deep=True))
+
+    assert figures.calculate_caption_distance(caption, picture) is None
+
+
+@pytest.mark.parametrize(
+    "conflict",
+    [
+        "duplicate_caption",
+        "competing_picture",
+        "competing_caption",
+    ],
+)
+def test_recover_figure_captions_rejects_ambiguous_matches(
+    conflict: str,
+) -> None:
+    document, picture, caption = _make_caption_recovery_document()
+
+    if conflict == "competing_picture":
+        competitor = document.add_picture()
+        competitor.prov.append(picture.prov[0].model_copy(deep=True))
+    else:
+        text = (
+            caption.text
+            if conflict == "duplicate_caption"
+            else "Fig. 9. Another Docling caption."
+        )
+        competitor = document.add_text(
+            label=DocItemLabel.CAPTION,
+            text=text,
+        )
+        competitor.prov.append(caption.prov[0].model_copy(deep=True))
+
+    original_document = document.model_dump()
+    candidates = figures.collect_figure_candidates(document)
+
+    recoveries = figures.recover_figure_captions(document, candidates)
+
+    assert recoveries == {}
+    assert document.model_dump() == original_document
+
+
+def test_recover_figure_captions_preserves_existing_association() -> None:
+    document, picture, caption = _make_caption_recovery_document()
+
+    linked_picture = document.add_picture(caption=caption)
+    linked_picture.prov.append(
+        ProvenanceItem(
+            page_no=1,
+            bbox=BoundingBox(
+                l=200.0,
+                t=160.0,
+                r=260.0,
+                b=100.0,
+                coord_origin=CoordOrigin.BOTTOMLEFT,
+            ),
+            charspan=(0, 0),
+        )
+    )
+
+    original_document = document.model_dump()
+    candidates = figures.collect_figure_candidates(document)
+
+    recoveries = figures.recover_figure_captions(document, candidates)
+
+    assert recoveries == {}
+    assert picture.captions == []
+    assert linked_picture.caption_text(document) == caption.text
+    assert document.model_dump() == original_document
+
+
+def test_extract_figures_recovers_caption_and_preserves_provenance(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+) -> None:
+    document, picture, caption = _make_caption_recovery_document()
+    original_document = document.model_dump()
+
+    fake_docling_converter.convert.return_value.document = document
+
+    markdown_path = extraction_ready_run / "document_conversion" / "document.md"
+    markdown_path.write_text(
+        "<figcaption>Figure 8: Markdown caption.</figcaption>",
+        encoding="utf-8",
+    )
+
+    manifest_path = figures.extract_figures(extraction_ready_run)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert len(manifest["figures"]) == 1
+
+    entry = manifest["figures"][0]
+
+    assert entry["figure_id"] == "figure_8"
+    assert entry["label"] == "Figure 8"
+    assert entry["relative_path"] == "figures/figure_8.png"
+    assert entry["caption"] == "Figure 8: Markdown caption."
+    assert entry["caption_source"] == "markdown"
+    assert entry["association_method"] == "geometric_recovery"
+    assert entry["unresolved_reason"] is None
+
+    assert len(entry["candidates"]) == 1
+    candidate = entry["candidates"][0]
+
+    assert candidate["docling_ref"] == picture.self_ref
+    assert candidate["caption_docling"] == ""
+    assert candidate["caption_refs"] == []
+
+    assert entry["caption_recovery"] == {
+        "docling_ref": caption.self_ref,
+        "text": "Fig. 8. Original Docling caption.",
+        "positions": [
+            provenance.model_dump(mode="json") for provenance in caption.prov
+        ],
+        "distance_pt": 15.0,
+    }
+
+    image_path = extraction_ready_run / entry["relative_path"]
+
+    with Image.open(image_path) as image:
+        assert image.format == "PNG"
+        assert image.mode == "RGB"
+        image.load()
+
+    assert document.model_dump() == original_document
+    assert (
+        runs.load_run_status(extraction_ready_run).phases.figure_extraction.state
+        == "succeeded"
+    )
+
+    fake_docling_converter.convert.assert_called_once_with(
+        extraction_ready_run / "input" / "paper.pdf"
+    )
