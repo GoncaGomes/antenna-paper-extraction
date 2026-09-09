@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -18,7 +19,7 @@ from docling_core.types.doc import (
 from PIL import Image
 from pypdf import PdfWriter
 
-from antenna_paper_extraction import figures
+from antenna_paper_extraction import figures, runs
 from antenna_paper_extraction.figures import (
     extract_figure_label,
     extract_markdown_captions,
@@ -748,3 +749,319 @@ def test_render_run_figure_crops_rejects_modified_preserved_pdf(
         figures.render_run_figure_crops(run_dir, [association])
 
     assert not (run_dir / "figures").exists()
+
+
+@pytest.fixture
+def extraction_ready_run(
+    tmp_path: Path,
+    fake_docling_converter: Mock,
+) -> Path:
+    run_dir = _create_figure_rendering_run(tmp_path)
+
+    runs.mark_page_rendering_running(run_dir)
+    runs.mark_page_rendering_succeeded(run_dir)
+    runs.mark_document_conversion_running(run_dir)
+    runs.mark_document_conversion_succeeded(run_dir)
+
+    conversion_dir = run_dir / "document_conversion"
+    conversion_dir.mkdir()
+
+    (conversion_dir / "document.md").write_text(
+        "<figcaption>Figure 1: Markdown caption.</figcaption>\n"
+        "<figcaption>Figure 2: Missing picture.</figcaption>\n",
+        encoding="utf-8",
+    )
+
+    document = DoclingDocument(name="synthetic")
+    _make_render_association(document, 1)
+
+    fake_docling_converter.convert.return_value = SimpleNamespace(
+        status=ConversionStatus.SUCCESS,
+        document=document,
+        errors=[],
+    )
+
+    return run_dir
+
+
+def test_extract_figures_persists_images_manifest_and_status(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+) -> None:
+    run_dir = extraction_ready_run
+    document_path = run_dir / "document_conversion" / "document.md"
+    original_markdown = document_path.read_bytes()
+
+    manifest_path = figures.extract_figures(
+        run_dir,
+        scale=2.0,
+        margin_pt=1.0,
+    )
+
+    assert manifest_path == run_dir / "figures" / "manifest.json"
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["document_id"] == run_manifest["document_id"]
+    assert manifest["source_pdf"] == "input/paper.pdf"
+    assert manifest["markdown_path"] == "document_conversion/document.md"
+    assert manifest["rendering"]["scale"] == 2.0
+    assert manifest["rendering"]["margin_pt"] == 1.0
+
+    resolved, pending = manifest["figures"]
+
+    assert resolved["figure_id"] == "figure_1"
+    assert resolved["relative_path"] == "figures/figure_1.png"
+    assert resolved["caption"] == "Figure 1: Markdown caption."
+    assert resolved["caption_source"] == "markdown"
+    assert resolved["association_method"] == "docling"
+    assert resolved["unresolved_reason"] is None
+
+    candidate = resolved["candidates"][0]
+
+    assert candidate["caption_docling"] == ("Fig. 1. Original Docling caption.")
+    assert candidate["caption_refs"]
+    assert candidate["positions"][0]["page_no"] == 1
+    assert candidate["positions"][0]["bbox"]["coord_origin"] == "TOPLEFT"
+
+    assert pending["figure_id"] == "figure_2"
+    assert pending["relative_path"] is None
+    assert pending["markdown_captions"] == ["Figure 2: Missing picture."]
+    assert pending["candidates"] == []
+    assert pending["unresolved_reason"]
+
+    with Image.open(run_dir / resolved["relative_path"]) as image:
+        assert image.format == "PNG"
+        assert image.mode == "RGB"
+        assert image.size == (64, 84)
+
+    assert set(manifest["timings_seconds"]) == {
+        "docling",
+        "association",
+        "figure_rendering",
+    }
+    assert all(value >= 0 for value in manifest["timings_seconds"].values())
+
+    assert document_path.read_bytes() == original_markdown
+    assert runs.load_run_status(run_dir).phases.figure_extraction.state == ("succeeded")
+    fake_docling_converter.convert.assert_called_once_with(
+        run_dir / "input" / "paper.pdf"
+    )
+
+
+def test_extract_figures_writes_manifest_when_all_figures_are_unresolved(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+) -> None:
+    fake_docling_converter.convert.return_value.document = DoclingDocument(name="empty")
+
+    manifest_path = figures.extract_figures(extraction_ready_run)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert len(manifest["figures"]) == 2
+    assert all(
+        entry["relative_path"] is None and entry["unresolved_reason"]
+        for entry in manifest["figures"]
+    )
+    assert list(manifest_path.parent.glob("*.png")) == []
+    assert (
+        runs.load_run_status(extraction_ready_run).phases.figure_extraction.state
+        == "succeeded"
+    )
+
+
+def test_extract_figures_preserves_ambiguous_captions(
+    extraction_ready_run: Path,
+) -> None:
+    caption = "Figure 1: Repeated caption."
+    document_path = extraction_ready_run / "document_conversion" / "document.md"
+    document_path.write_text(
+        f"<figcaption>{caption}</figcaption>\n<figcaption>{caption}</figcaption>\n",
+        encoding="utf-8",
+    )
+
+    manifest_path = figures.extract_figures(extraction_ready_run)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert len(manifest["figures"]) == 1
+
+    entry = manifest["figures"][0]
+
+    assert entry["markdown_captions"] == [caption, caption]
+    assert len(entry["candidates"]) == 1
+    assert entry["caption"] is None
+    assert entry["association_method"] is None
+    assert entry["relative_path"] is None
+    assert entry["unresolved_reason"]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_error"),
+    [
+        (None, FileNotFoundError),
+        (" \n\t", ValueError),
+    ],
+)
+def test_extract_figures_rejects_missing_or_empty_markdown(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+    content: str | None,
+    expected_error: type[Exception],
+) -> None:
+    document_path = extraction_ready_run / "document_conversion" / "document.md"
+
+    if content is None:
+        document_path.unlink()
+    else:
+        document_path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(expected_error):
+        figures.extract_figures(extraction_ready_run)
+
+    phase = runs.load_run_status(extraction_ready_run).phases.figure_extraction
+
+    assert phase.state == "failed"
+    assert phase.error is not None
+    assert "input validation" in phase.error.message
+    assert not (extraction_ready_run / "figures").exists()
+    fake_docling_converter.convert.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("problem", "message"),
+    [
+        ("conversion", "Document conversion must succeed"),
+        ("identity", "Run status identity"),
+        ("already_started", "pending state"),
+    ],
+)
+def test_extract_figures_rejects_invalid_prerequisites(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+    problem: str,
+    message: str,
+) -> None:
+    status_path = extraction_ready_run / "status.json"
+
+    if problem == "already_started":
+        runs.mark_figure_extraction_running(extraction_ready_run)
+    else:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+        if problem == "conversion":
+            payload["phases"]["document_conversion"] = runs.PhaseStatus(
+                state="pending"
+            ).model_dump(mode="json")
+        else:
+            payload["run_id"] = "different-run"
+
+        status_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    original_status = status_path.read_bytes()
+
+    with pytest.raises(ValueError, match=message):
+        figures.extract_figures(extraction_ready_run)
+
+    assert status_path.read_bytes() == original_status
+    fake_docling_converter.convert.assert_not_called()
+
+
+def test_extract_figures_rejects_existing_output_before_docling(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+) -> None:
+    output_dir = extraction_ready_run / "figures"
+    output_dir.mkdir()
+
+    existing_file = output_dir / "keep.txt"
+    existing_file.write_text("existing output", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="Figure output already exists"):
+        figures.extract_figures(extraction_ready_run)
+
+    assert existing_file.read_text(encoding="utf-8") == "existing output"
+    assert list(output_dir.iterdir()) == [existing_file]
+    assert (
+        runs.load_run_status(extraction_ready_run).phases.figure_extraction.state
+        == "pending"
+    )
+    fake_docling_converter.convert.assert_not_called()
+
+
+def test_extract_figures_records_docling_failure(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+) -> None:
+    fake_docling_converter.convert.side_effect = RuntimeError(
+        "Synthetic layout failure."
+    )
+
+    with pytest.raises(RuntimeError, match="Synthetic layout failure"):
+        figures.extract_figures(extraction_ready_run)
+
+    phase = runs.load_run_status(extraction_ready_run).phases.figure_extraction
+
+    assert phase.state == "failed"
+    assert phase.error is not None
+    assert phase.error.type == "RuntimeError"
+    assert "Docling processing" in phase.error.message
+    assert not (extraction_ready_run / "figures").exists()
+    fake_docling_converter.convert.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "expected_stage"),
+    [
+        ("second_image", "figure rendering"),
+        ("manifest", "manifest persistence"),
+    ],
+)
+def test_extract_figures_preserves_images_after_persistence_failure(
+    extraction_ready_run: Path,
+    fake_docling_converter: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+    expected_stage: str,
+) -> None:
+    document = fake_docling_converter.convert.return_value.document
+    _make_render_association(document, 2)
+
+    if failure_point == "second_image":
+        original_write_bytes = figures.write_bytes
+
+        def fail_second_image(path: Path, data: bytes) -> None:
+            if path.name == "figure_2.png":
+                raise OSError("Synthetic write failure.")
+
+            original_write_bytes(path, data)
+
+        monkeypatch.setattr(figures, "write_bytes", fail_second_image)
+    else:
+        monkeypatch.setattr(
+            figures,
+            "write_json",
+            Mock(side_effect=OSError("Synthetic write failure.")),
+        )
+
+    with pytest.raises(OSError, match="Synthetic write failure"):
+        figures.extract_figures(extraction_ready_run)
+
+    output_dir = extraction_ready_run / "figures"
+
+    assert (output_dir / "figure_1.png").is_file()
+    assert not (output_dir / "manifest.json").exists()
+
+    if failure_point == "manifest":
+        assert (output_dir / "figure_2.png").is_file()
+    else:
+        assert not (output_dir / "figure_2.png").exists()
+
+    status = runs.load_run_status(extraction_ready_run)
+    phase = status.phases.figure_extraction
+
+    assert phase.state == "failed"
+    assert phase.error is not None
+    assert phase.error.type == "OSError"
+    assert expected_stage in phase.error.message
+    assert status.phases.document_conversion.state == "succeeded"

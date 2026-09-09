@@ -3,8 +3,10 @@ import re
 from contextlib import closing
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
+from importlib.metadata import version
 from math import ceil, floor, isfinite
 from pathlib import Path
+from time import perf_counter
 
 import pypdfium2 as pdfium
 from docling.datamodel.base_models import ConversionStatus, InputFormat
@@ -18,8 +20,18 @@ from docling_core.types.doc import (
 )
 from PIL import Image
 
-from antenna_paper_extraction.persistence import write_bytes
-from antenna_paper_extraction.runs import RunManifest, sha256_file
+from antenna_paper_extraction.persistence import write_bytes, write_json
+from antenna_paper_extraction.runs import (
+    PhaseFailure,
+    RunManifest,
+    load_run_status,
+    mark_figure_extraction_failed,
+    mark_figure_extraction_running,
+    mark_figure_extraction_succeeded,
+    sha256_file,
+)
+
+DOCLING_IMAGES_SCALE = 3.0
 
 
 @dataclass(frozen=True)
@@ -122,7 +134,7 @@ def load_docling_document(pdf_path: Path) -> DoclingDocument:
         raise IsADirectoryError(f"PDF path is not a file: {pdf_path}")
 
     pipeline_options = PdfPipelineOptions(
-        images_scale=3.0,
+        images_scale=DOCLING_IMAGES_SCALE,
         generate_picture_images=False,
         generate_page_images=False,
     )
@@ -496,3 +508,178 @@ def render_run_figure_crops(
                         )
 
     return results
+
+
+def _build_figure_manifest_entries(
+    results: list[FigureCropResult],
+    document: DoclingDocument,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+
+    for result in results:
+        association = result.association
+        unique_association = association.unresolved_reason is None
+
+        figure_id = None
+        if association.label is not None:
+            number = association.label.removeprefix("Figure ")
+            figure_id = f"figure_{number}"
+
+        caption = None
+        if unique_association:
+            caption = association.markdown_captions[0]
+
+        candidates = []
+
+        for picture in association.pictures:
+            candidates.append(
+                {
+                    "docling_ref": picture.self_ref,
+                    "caption_docling": picture.caption_text(document),
+                    "caption_refs": [reference.cref for reference in picture.captions],
+                    "positions": [
+                        provenance.model_dump(mode="json")
+                        for provenance in picture.prov
+                    ],
+                }
+            )
+
+        entries.append(
+            {
+                "figure_id": figure_id,
+                "label": association.label,
+                "relative_path": result.relative_path,
+                "caption": caption,
+                "caption_source": "markdown" if caption is not None else None,
+                "association_method": ("docling" if unique_association else None),
+                "markdown_captions": list(association.markdown_captions),
+                "candidates": candidates,
+                "unresolved_reason": result.unresolved_reason,
+            }
+        )
+
+    return entries
+
+
+def extract_figures(
+    run_dir: Path,
+    *,
+    scale: float = 3.0,
+    margin_pt: float = 2.0,
+) -> Path:
+    run_dir = Path(run_dir).resolve()
+
+    run_manifest = RunManifest.model_validate_json(
+        (run_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    run_status = load_run_status(run_dir)
+
+    if run_status.run_id != run_manifest.run_id:
+        raise ValueError("Run status identity does not match the run manifest.")
+
+    if run_status.phases.document_conversion.state != "succeeded":
+        raise ValueError("Document conversion must succeed before figure extraction.")
+
+    if run_status.phases.figure_extraction.state != "pending":
+        raise ValueError("Figure extraction can only start from the pending state.")
+
+    if not isfinite(scale) or scale <= 0:
+        raise ValueError("Rendering scale must be finite and positive.")
+
+    if not isfinite(margin_pt) or margin_pt < 0:
+        raise ValueError("Crop margin must be finite and non-negative.")
+
+    output_dir = run_dir / "figures"
+
+    if output_dir.exists() or output_dir.is_symlink():
+        raise FileExistsError(f"Figure output already exists: {output_dir}")
+
+    document_path = run_dir / "document_conversion" / "document.md"
+    manifest_path = output_dir / "manifest.json"
+
+    mark_figure_extraction_running(run_dir)
+    failure_stage = "input validation"
+
+    try:
+        pdf_path = _load_preserved_pdf(run_dir)
+        markdown = document_path.read_text(encoding="utf-8")
+
+        if not markdown.strip():
+            raise ValueError("Converted Markdown is empty.")
+
+        failure_stage = "Docling processing"
+        started = perf_counter()
+
+        document = load_docling_document(pdf_path)
+
+        docling_seconds = perf_counter() - started
+
+        failure_stage = "caption association"
+        started = perf_counter()
+
+        candidates = collect_figure_candidates(document)
+        associations = associate_figure_captions(
+            markdown,
+            document,
+            candidates,
+        )
+
+        association_seconds = perf_counter() - started
+
+        failure_stage = "figure rendering"
+        started = perf_counter()
+
+        results = render_run_figure_crops(
+            run_dir,
+            associations,
+            scale=scale,
+            margin_pt=margin_pt,
+        )
+
+        rendering_seconds = perf_counter() - started
+
+        failure_stage = "manifest preparation"
+
+        manifest = {
+            "schema_version": "1.0",
+            "document_id": run_manifest.document_id,
+            "source_pdf": run_manifest.source_pdf.relative_path,
+            "markdown_path": "document_conversion/document.md",
+            "docling": {
+                "version": version("docling"),
+                "core_version": version("docling-core"),
+                "images_scale": DOCLING_IMAGES_SCALE,
+                "generate_picture_images": False,
+                "generate_page_images": False,
+            },
+            "rendering": {
+                "renderer": "pypdfium2",
+                "version": version("pypdfium2"),
+                "scale": scale,
+                "margin_pt": margin_pt,
+            },
+            "timings_seconds": {
+                "docling": docling_seconds,
+                "association": association_seconds,
+                "figure_rendering": rendering_seconds,
+            },
+            "figures": _build_figure_manifest_entries(results, document),
+        }
+
+        failure_stage = "manifest persistence"
+
+        write_json(manifest_path, manifest)
+
+        failure_stage = "status update"
+
+        mark_figure_extraction_succeeded(run_dir)
+
+    except Exception as error:
+        failure = PhaseFailure(
+            type=type(error).__name__,
+            message=(f"Figure extraction failed during {failure_stage}: {error}"),
+        )
+        mark_figure_extraction_failed(run_dir, failure)
+        raise
+
+    return manifest_path
