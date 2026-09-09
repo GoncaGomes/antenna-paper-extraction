@@ -1,9 +1,9 @@
+import io
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
-import io
-from PIL import Image
 
+import pypdfium2 as pdfium
 import pytest
 from docling.datamodel.base_models import ConversionStatus
 from docling_core.types.doc import (
@@ -15,6 +15,8 @@ from docling_core.types.doc import (
     ProvenanceItem,
     TableData,
 )
+from PIL import Image
+from pypdf import PdfWriter
 
 from antenna_paper_extraction import figures
 from antenna_paper_extraction.figures import (
@@ -22,6 +24,7 @@ from antenna_paper_extraction.figures import (
     extract_markdown_captions,
     group_captions_by_label,
 )
+from antenna_paper_extraction.runs import create_run
 
 
 @pytest.mark.parametrize(
@@ -528,12 +531,220 @@ def test_crop_figure_to_png_preserves_pixels_and_source_image() -> None:
 
         assert page_image.tobytes() == original_pixels
 
-    with io.BytesIO(png_bytes) as buffer:
-        with Image.open(buffer) as cropped_image:
-            assert cropped_image.format == "PNG"
-            assert cropped_image.mode == "RGB"
-            assert cropped_image.size == (10, 10)
+    with io.BytesIO(png_bytes) as buffer, Image.open(buffer) as cropped_image:
+        assert cropped_image.format == "PNG"
+        assert cropped_image.mode == "RGB"
+        assert cropped_image.size == (10, 10)
 
-            assert cropped_image.getpixel((0, 0)) == (255, 0, 0)
-            assert cropped_image.getpixel((9, 9)) == (0, 0, 255)
-            assert cropped_image.getpixel((5, 5)) == (255, 255, 255)
+        assert cropped_image.getpixel((0, 0)) == (255, 0, 0)
+        assert cropped_image.getpixel((9, 9)) == (0, 0, 255)
+        assert cropped_image.getpixel((5, 5)) == (255, 255, 255)
+
+
+def _create_figure_rendering_run(tmp_path: Path) -> Path:
+    source_pdf = tmp_path / "paper.pdf"
+
+    with PdfWriter() as writer:
+        for width in (100, 120, 140):
+            writer.add_blank_page(width=width, height=200)
+
+        with source_pdf.open("wb") as output:
+            writer.write(output)
+
+    run_dir = create_run(source_pdf, tmp_path / "runs")
+    source_pdf.unlink()
+
+    return run_dir
+
+
+def _make_render_association(
+    document: DoclingDocument,
+    number: int,
+    page_number: int = 1,
+) -> figures.FigureCaptionAssociation:
+    picture = _add_picture_with_caption(
+        document,
+        f"Fig. {number}. Original Docling caption.",
+    )
+
+    picture.prov.append(
+        ProvenanceItem(
+            page_no=page_number,
+            bbox=BoundingBox(
+                l=10.0,
+                t=20.0,
+                r=40.0,
+                b=60.0,
+                coord_origin=CoordOrigin.TOPLEFT,
+            ),
+            charspan=(0, 0),
+        )
+    )
+
+    return figures.FigureCaptionAssociation(
+        label=f"Figure {number}",
+        markdown_captions=(f"Figure {number}: Markdown caption.",),
+        pictures=(picture,),
+        unresolved_reason=None,
+    )
+
+
+def test_render_run_figure_crops_reuses_pages_and_preserves_associations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _create_figure_rendering_run(tmp_path)
+    document = DoclingDocument(name="synthetic")
+
+    associations = [
+        _make_render_association(document, 8, page_number=2),
+        _make_render_association(document, 7, page_number=1),
+        _make_render_association(document, 9, page_number=1),
+    ]
+
+    rendered_page_sizes: list[tuple[float, float]] = []
+    original_render = pdfium.PdfPage.render
+
+    def track_render(
+        page: pdfium.PdfPage,
+        **kwargs: object,
+    ) -> pdfium.PdfBitmap:
+        rendered_page_sizes.append(page.get_size())
+        return original_render(page, **kwargs)
+
+    monkeypatch.setattr(pdfium.PdfPage, "render", track_render)
+
+    results = figures.render_run_figure_crops(run_dir, associations)
+
+    assert rendered_page_sizes == [
+        (100.0, 200.0),
+        (120.0, 200.0),
+    ]
+    assert not (run_dir / "pages").exists()
+
+    assert [result.relative_path for result in results] == [
+        "figures/figure_8.png",
+        "figures/figure_7.png",
+        "figures/figure_9.png",
+    ]
+
+    for result, association in zip(results, associations, strict=True):
+        assert result.association is association
+        assert result.unresolved_reason is None
+        assert result.relative_path is not None
+
+        with Image.open(run_dir / result.relative_path) as image:
+            assert image.format == "PNG"
+            assert image.mode == "RGB"
+            assert image.size == (102, 132)
+
+
+@pytest.mark.parametrize(
+    ("problem", "expected_reason"),
+    [
+        ("missing_region", "Expected one source region"),
+        ("multiple_regions", "Expected one source region"),
+        ("unknown_page", "Source page 4 is outside the PDF"),
+        ("outside_page", "Invalid figure region"),
+    ],
+)
+def test_render_run_figure_crops_preserves_unrenderable_figures(
+    tmp_path: Path,
+    problem: str,
+    expected_reason: str,
+) -> None:
+    run_dir = _create_figure_rendering_run(tmp_path)
+    document = DoclingDocument(name="synthetic")
+
+    valid = _make_render_association(document, 1)
+    problematic = _make_render_association(document, 2)
+    picture = problematic.pictures[0]
+
+    if problem == "missing_region":
+        picture.prov.clear()
+    elif problem == "multiple_regions":
+        picture.prov.append(picture.prov[0])
+    elif problem == "unknown_page":
+        picture.prov[0].page_no = 4
+    elif problem == "outside_page":
+        picture.prov[0].bbox = BoundingBox(
+            l=200.0,
+            t=20.0,
+            r=240.0,
+            b=60.0,
+            coord_origin=CoordOrigin.TOPLEFT,
+        )
+
+    results = figures.render_run_figure_crops(
+        run_dir,
+        [valid, problematic],
+    )
+
+    assert len(results) == 2
+
+    assert results[0].relative_path == "figures/figure_1.png"
+    assert results[0].unresolved_reason is None
+    assert (run_dir / "figures" / "figure_1.png").is_file()
+
+    assert results[1].association is problematic
+    assert results[1].relative_path is None
+    assert results[1].unresolved_reason is not None
+    assert expected_reason in results[1].unresolved_reason
+    assert not (run_dir / "figures" / "figure_2.png").exists()
+
+
+def test_render_run_figure_crops_preserves_unresolved_association(
+    tmp_path: Path,
+) -> None:
+    run_dir = _create_figure_rendering_run(tmp_path)
+
+    association = figures.FigureCaptionAssociation(
+        label="Figure 8",
+        markdown_captions=("Figure 8: Markdown caption.",),
+        pictures=(),
+        unresolved_reason="No Docling candidate.",
+    )
+
+    results = figures.render_run_figure_crops(run_dir, [association])
+
+    assert len(results) == 1
+    assert results[0].association is association
+    assert results[0].relative_path is None
+    assert results[0].unresolved_reason == "No Docling candidate."
+    assert not (run_dir / "figures").exists()
+
+
+def test_render_run_figure_crops_rejects_existing_output(
+    tmp_path: Path,
+) -> None:
+    run_dir = _create_figure_rendering_run(tmp_path)
+    document = DoclingDocument(name="synthetic")
+    association = _make_render_association(document, 1)
+
+    output_dir = run_dir / "figures"
+    output_dir.mkdir()
+
+    existing_file = output_dir / "keep.txt"
+    existing_file.write_text("existing output", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="Figure output already exists"):
+        figures.render_run_figure_crops(run_dir, [association])
+
+    assert existing_file.read_text(encoding="utf-8") == "existing output"
+    assert list(output_dir.iterdir()) == [existing_file]
+
+
+def test_render_run_figure_crops_rejects_modified_preserved_pdf(
+    tmp_path: Path,
+) -> None:
+    run_dir = _create_figure_rendering_run(tmp_path)
+    document = DoclingDocument(name="synthetic")
+    association = _make_render_association(document, 1)
+
+    preserved_pdf = run_dir / "input" / "paper.pdf"
+    preserved_pdf.write_bytes(b"modified source")
+
+    with pytest.raises(ValueError, match="checksum does not match"):
+        figures.render_run_figure_crops(run_dir, [association])
+
+    assert not (run_dir / "figures").exists()

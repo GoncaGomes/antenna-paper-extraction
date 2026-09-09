@@ -1,11 +1,12 @@
-import re
 import io
-from dataclasses import dataclass
+import re
+from contextlib import closing
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from math import ceil, floor, isfinite
 from pathlib import Path
-from PIL import Image
 
+import pypdfium2 as pdfium
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -15,6 +16,10 @@ from docling_core.types.doc import (
     DoclingDocument,
     PictureItem,
 )
+from PIL import Image
+
+from antenna_paper_extraction.persistence import write_bytes
+from antenna_paper_extraction.runs import RunManifest, sha256_file
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,13 @@ class FigureCaptionAssociation:
     label: str | None
     markdown_captions: tuple[str, ...]
     pictures: tuple[PictureItem, ...]
+    unresolved_reason: str | None
+
+
+@dataclass(frozen=True)
+class FigureCropResult:
+    association: FigureCaptionAssociation
+    relative_path: str | None
     unresolved_reason: str | None
 
 
@@ -302,6 +314,7 @@ def calculate_figure_crop_bounds(
 
     return bounds
 
+
 def crop_figure_to_png(
     page_image: Image.Image,
     bbox: BoundingBox,
@@ -316,8 +329,170 @@ def crop_figure_to_png(
         margin_pt=margin_pt,
     )
 
-    with page_image.crop(bounds) as cropped_image:
-        with cropped_image.convert("RGB") as rgb_image:
-            with io.BytesIO() as buffer:
-                rgb_image.save(buffer, format="PNG")
-                return buffer.getvalue()
+    with (
+        page_image.crop(bounds) as cropped_image,
+        cropped_image.convert("RGB") as rgb_image,
+        io.BytesIO() as buffer,
+    ):
+        rgb_image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
+def _load_preserved_pdf(run_dir: Path) -> Path:
+    run_dir = Path(run_dir).resolve()
+
+    manifest = RunManifest.model_validate_json(
+        (run_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    pdf_path = (run_dir / manifest.source_pdf.relative_path).resolve()
+
+    if not pdf_path.is_relative_to(run_dir / "input"):
+        raise ValueError("Source PDF must be inside the run input directory.")
+
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"Preserved PDF does not exist: {pdf_path}")
+
+    if not pdf_path.is_file():
+        raise IsADirectoryError(f"Preserved PDF path is not a file: {pdf_path}")
+
+    source_sha256 = sha256_file(pdf_path)
+
+    if source_sha256 != manifest.source_pdf.sha256:
+        raise ValueError("Preserved PDF checksum does not match the run manifest.")
+
+    if manifest.document_id != f"sha256:{source_sha256}":
+        raise ValueError("Document identity does not match the preserved PDF.")
+
+    return pdf_path
+
+
+def _group_figure_crops_by_page(
+    associations: list[FigureCaptionAssociation],
+) -> tuple[dict[int, list[int]], list[FigureCropResult]]:
+    by_page: dict[int, list[int]] = {}
+    results: list[FigureCropResult] = []
+
+    for index, association in enumerate(associations):
+        reason = association.unresolved_reason
+
+        if reason is None:
+            if (
+                association.label is None
+                or len(association.markdown_captions) != 1
+                or len(association.pictures) != 1
+            ):
+                reason = "Figure association is not unique."
+            else:
+                picture = association.pictures[0]
+
+                if len(picture.prov) != 1:
+                    reason = f"Expected one source region; found {len(picture.prov)}."
+                else:
+                    page_number = picture.prov[0].page_no
+                    by_page.setdefault(page_number, []).append(index)
+
+        results.append(
+            FigureCropResult(
+                association=association,
+                relative_path=None,
+                unresolved_reason=reason,
+            )
+        )
+
+    return by_page, results
+
+
+def render_run_figure_crops(
+    run_dir: Path,
+    associations: list[FigureCaptionAssociation],
+    *,
+    scale: float = 3.0,
+    margin_pt: float = 2.0,
+) -> list[FigureCropResult]:
+    run_dir = Path(run_dir).resolve()
+
+    if not isfinite(scale) or scale <= 0:
+        raise ValueError("Rendering scale must be finite and positive.")
+
+    if not isfinite(margin_pt) or margin_pt < 0:
+        raise ValueError("Crop margin must be finite and non-negative.")
+
+    pdf_path = _load_preserved_pdf(run_dir)
+    output_dir = run_dir / "figures"
+
+    if output_dir.exists():
+        raise FileExistsError(f"Figure output already exists: {output_dir}")
+
+    by_page, results = _group_figure_crops_by_page(associations)
+
+    if not by_page:
+        return results
+
+    with pdfium.PdfDocument(pdf_path) as pdf:
+        output_dir.mkdir(exist_ok=False)
+
+        for page_number, indexes in sorted(by_page.items()):
+            if not 1 <= page_number <= len(pdf):
+                for index in indexes:
+                    results[index] = replace(
+                        results[index],
+                        unresolved_reason=(
+                            f"Source page {page_number} is outside the PDF."
+                        ),
+                    )
+                continue
+
+            with closing(pdf[page_number - 1]) as page:
+                page_size = page.get_size()
+
+                with (
+                    closing(
+                        page.render(
+                            scale=scale,
+                            fill_color=(255, 255, 255, 255),
+                            draw_annots=True,
+                        )
+                    ) as bitmap,
+                    bitmap.to_pil() as page_image,
+                ):
+                    for index in indexes:
+                        association = results[index].association
+                        picture = association.pictures[0]
+
+                        try:
+                            png_bytes = crop_figure_to_png(
+                                page_image=page_image,
+                                bbox=picture.prov[0].bbox,
+                                page_size=page_size,
+                                margin_pt=margin_pt,
+                            )
+                        except ValueError as error:
+                            results[index] = replace(
+                                results[index],
+                                unresolved_reason=f"Invalid figure region: {error}",
+                            )
+                            continue
+
+                        label = association.label
+
+                        if label is None:
+                            raise ValueError("Renderable figure has no label.")
+
+                        figure_number = int(label.removeprefix("Figure "))
+                        relative_path = f"figures/figure_{figure_number}.png"
+                        output_path = run_dir / relative_path
+
+                        if output_path.exists():
+                            raise FileExistsError(
+                                f"Figure file already exists: {output_path}"
+                            )
+
+                        write_bytes(output_path, png_bytes)
+
+                        results[index] = replace(
+                            results[index],
+                            relative_path=relative_path,
+                        )
+
+    return results
