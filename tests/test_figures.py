@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+import io
+from PIL import Image
 
 import pytest
 from docling.datamodel.base_models import ConversionStatus
@@ -9,6 +11,7 @@ from docling_core.types.doc import (
     CoordOrigin,
     DocItemLabel,
     DoclingDocument,
+    PictureItem,
     ProvenanceItem,
     TableData,
 )
@@ -261,3 +264,276 @@ def test_collect_figure_candidates_preserves_caption_and_position() -> None:
     assert candidates[1].caption_text(document) == ""
     assert candidates[1].captions == []
     assert candidates[1].prov == []
+
+
+def _add_picture_with_caption(
+    document: DoclingDocument,
+    text: str,
+) -> PictureItem:
+    caption = document.add_text(
+        label=DocItemLabel.CAPTION,
+        text=text,
+    )
+
+    return document.add_picture(caption=caption)
+
+
+def test_associate_figure_captions_matches_labels_instead_of_picture_order() -> None:
+    document = DoclingDocument(name="synthetic")
+
+    picture_8 = _add_picture_with_caption(
+        document,
+        "Fig. 8. Original Docling caption for eight.",
+    )
+    picture_7 = _add_picture_with_caption(
+        document,
+        "Fig. 7. Original Docling caption for seven.",
+    )
+
+    markdown = """
+<figcaption>Figure 7: Markdown caption for seven.</figcaption>
+<figcaption>Figure 8: Markdown caption for eight.</figcaption>
+"""
+
+    original_document = document.model_dump()
+    candidates = figures.collect_figure_candidates(document)
+
+    associations = figures.associate_figure_captions(
+        markdown,
+        document,
+        candidates,
+    )
+
+    assert len(associations) == 2
+
+    association_7, association_8 = associations
+
+    assert association_7.label == "Figure 7"
+    assert association_7.markdown_captions == ("Figure 7: Markdown caption for seven.",)
+    assert len(association_7.pictures) == 1
+    assert association_7.pictures[0] is picture_7
+    assert association_7.unresolved_reason is None
+
+    assert association_8.label == "Figure 8"
+    assert association_8.markdown_captions == ("Figure 8: Markdown caption for eight.",)
+    assert len(association_8.pictures) == 1
+    assert association_8.pictures[0] is picture_8
+    assert association_8.unresolved_reason is None
+
+    assert document.model_dump() == original_document
+
+
+@pytest.mark.parametrize(
+    ("caption_count", "picture_count"),
+    [
+        (1, 0),
+        (0, 1),
+        (2, 1),
+        (1, 2),
+    ],
+)
+def test_associate_figure_captions_preserves_non_unique_matches(
+    caption_count: int,
+    picture_count: int,
+) -> None:
+    document = DoclingDocument(name="synthetic")
+
+    pictures = [
+        _add_picture_with_caption(
+            document,
+            "Fig. 8. Original Docling caption.",
+        )
+        for _ in range(picture_count)
+    ]
+
+    markdown_caption = "Figure 8: Markdown caption."
+    markdown = "\n".join(
+        f"<figcaption>{markdown_caption}</figcaption>" for _ in range(caption_count)
+    )
+
+    associations = figures.associate_figure_captions(
+        markdown,
+        document,
+        pictures,
+    )
+
+    assert len(associations) == 1
+
+    association = associations[0]
+
+    assert association.label == "Figure 8"
+    assert association.markdown_captions == (markdown_caption,) * caption_count
+    assert association.pictures == tuple(pictures)
+    assert association.unresolved_reason is not None
+    assert association.unresolved_reason.strip()
+
+
+def test_associate_figure_captions_keeps_unrecognized_items_separate() -> None:
+    document = DoclingDocument(name="synthetic")
+
+    uncaptioned_picture = document.add_picture()
+    unrecognized_picture = _add_picture_with_caption(
+        document,
+        "Antenna photograph.",
+    )
+
+    markdown = """
+<figcaption>Prototype photograph.</figcaption>
+"""
+
+    associations = figures.associate_figure_captions(
+        markdown,
+        document,
+        [uncaptioned_picture, unrecognized_picture],
+    )
+
+    assert len(associations) == 3
+
+    markdown_item, missing_caption_item, unknown_label_item = associations
+
+    assert markdown_item.label is None
+    assert markdown_item.markdown_captions == ("Prototype photograph.",)
+    assert markdown_item.pictures == ()
+    assert markdown_item.unresolved_reason == ("Unrecognized Markdown figure label.")
+
+    assert missing_caption_item.label is None
+    assert missing_caption_item.markdown_captions == ()
+    assert missing_caption_item.pictures == (uncaptioned_picture,)
+    assert missing_caption_item.unresolved_reason == ("Missing Docling caption.")
+
+    assert unknown_label_item.label is None
+    assert unknown_label_item.markdown_captions == ()
+    assert unknown_label_item.pictures == (unrecognized_picture,)
+    assert unknown_label_item.unresolved_reason == (
+        "Unrecognized Docling figure label."
+    )
+
+
+@pytest.mark.parametrize(
+    ("origin", "top", "bottom"),
+    [
+        (CoordOrigin.TOPLEFT, 20.0, 100.0),
+        (CoordOrigin.BOTTOMLEFT, 180.0, 100.0),
+    ],
+)
+def test_calculate_figure_crop_bounds_handles_coordinate_origins(
+    origin: CoordOrigin,
+    top: float,
+    bottom: float,
+) -> None:
+    bbox = BoundingBox(
+        l=10.0,
+        t=top,
+        r=60.0,
+        b=bottom,
+        coord_origin=origin,
+    )
+
+    bounds = figures.calculate_figure_crop_bounds(
+        bbox=bbox,
+        page_size=(100.0, 200.0),
+        image_size=(300, 600),
+        margin_pt=2.0,
+    )
+
+    assert bounds == (24, 54, 186, 306)
+
+
+def test_calculate_figure_crop_bounds_rounds_outward() -> None:
+    bbox = BoundingBox(
+        l=10.2,
+        t=20.4,
+        r=60.6,
+        b=100.8,
+        coord_origin=CoordOrigin.TOPLEFT,
+    )
+
+    bounds = figures.calculate_figure_crop_bounds(
+        bbox=bbox,
+        page_size=(100.0, 200.0),
+        image_size=(301, 599),
+        margin_pt=2.0,
+    )
+
+    assert bounds == (24, 55, 189, 308)
+
+
+@pytest.mark.parametrize(
+    ("margin_pt", "message"),
+    [
+        (-1.0, "must not be negative"),
+        (float("nan"), "must be finite"),
+    ],
+)
+def test_calculate_figure_crop_bounds_rejects_invalid_margin(
+    margin_pt: float,
+    message: str,
+) -> None:
+    bbox = BoundingBox(
+        l=10.0,
+        t=20.0,
+        r=60.0,
+        b=100.0,
+        coord_origin=CoordOrigin.TOPLEFT,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        figures.calculate_figure_crop_bounds(
+            bbox=bbox,
+            page_size=(100.0, 200.0),
+            image_size=(300, 600),
+            margin_pt=margin_pt,
+        )
+
+
+def test_calculate_figure_crop_bounds_rejects_region_outside_page() -> None:
+    bbox = BoundingBox(
+        l=120.0,
+        t=20.0,
+        r=140.0,
+        b=60.0,
+        coord_origin=CoordOrigin.TOPLEFT,
+    )
+
+    with pytest.raises(ValueError, match="does not intersect"):
+        figures.calculate_figure_crop_bounds(
+            bbox=bbox,
+            page_size=(100.0, 200.0),
+            image_size=(300, 600),
+            margin_pt=2.0,
+        )
+
+
+def test_crop_figure_to_png_preserves_pixels_and_source_image() -> None:
+    bbox = BoundingBox(
+        l=2.0,
+        t=3.0,
+        r=7.0,
+        b=8.0,
+        coord_origin=CoordOrigin.TOPLEFT,
+    )
+
+    with Image.new("RGBA", (20, 30), (255, 255, 255, 255)) as page_image:
+        page_image.putpixel((4, 6), (255, 0, 0, 255))
+        page_image.putpixel((13, 15), (0, 0, 255, 255))
+
+        original_pixels = page_image.tobytes()
+
+        png_bytes = figures.crop_figure_to_png(
+            page_image=page_image,
+            bbox=bbox,
+            page_size=(10.0, 15.0),
+            margin_pt=0.0,
+        )
+
+        assert page_image.tobytes() == original_pixels
+
+    with io.BytesIO(png_bytes) as buffer:
+        with Image.open(buffer) as cropped_image:
+            assert cropped_image.format == "PNG"
+            assert cropped_image.mode == "RGB"
+            assert cropped_image.size == (10, 10)
+
+            assert cropped_image.getpixel((0, 0)) == (255, 0, 0)
+            assert cropped_image.getpixel((9, 9)) == (0, 0, 255)
+            assert cropped_image.getpixel((5, 5)) == (255, 255, 255)
