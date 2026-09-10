@@ -7,16 +7,20 @@ The final consumer-facing outputs will be:
 - `antenna_architecture.json`
 - `antenna_results.json`
 
-The complete extraction pipeline is not implemented. Phase 1 and the Phase 2
-NuExtract3 document-conversion implementation are available on the current
-`feat/document-package` feature branch. Phase 2 has been merged into
-`main`.
+The complete extraction pipeline is not implemented. Phases 1 and 2 are merged
+into `main`. The 03B figure-extraction increment is implemented on
+`feat/asset-inspection` and is being prepared for owner review and an
+intermediate merge. Phase 3 remains in progress.
 
 ## Project status
 
+Documentation updated: 2026-09-10.
+
 The available workflow creates an isolated run, preserves and verifies the
 source PDF, renders every page in source order, and converts those rendered
-pages into one Markdown document.
+pages into one Markdown document. A separate post-conversion step detects
+figure regions with Docling, attempts conservative caption recovery, and
+renders figure PNGs from the preserved PDF.
 
 Currently implemented:
 
@@ -28,6 +32,10 @@ Currently implemented:
 - Sequential NuExtract3 conversion in batches of up to eight pages
 - OpenAI-compatible response handling
 - Per-batch raw responses and traces
+- Post-conversion figure extraction with label-based caption association
+- Conservative same-page geometric recovery of missing caption associations
+- `figures/manifest.json` with provenance, timings, and unresolved entries
+- `figure_extraction` lifecycle support
 - Structured phase status and failure records
 - Timezone-aware lifecycle timestamps using `Europe/Lisbon`
 - Atomic JSON and binary persistence
@@ -35,7 +43,8 @@ Currently implemented:
 
 Not yet implemented:
 
-- Bounded visual asset inspection
+- Minimal visual catalogue, page fallback integration, and safe asset resolver
+- Bounded tool interaction and real multimodal protocol validation
 - Architecture and results extraction agents
 - Canonicalization and final JSON generation
 - An end-to-end pipeline command
@@ -46,9 +55,13 @@ The architecture defines this sequential flow:
 
 1. Initialize a traceable run and render the PDF pages in source order.
 2. Convert the ordered page sequence into Markdown with NuExtract3.
-3. Produce independent architecture and results evidence reports.
-4. Canonicalize the grounded claims into a shallow validated contract.
-5. Split the validated response into the two final JSON documents.
+3. Extract figures using converted Markdown captions and the preserved PDF.
+4. Build a minimal visual catalogue and expose safe figure/page inspection
+   through one tool round per agent (planned). Prepared figure and page files
+   already exist; this catalogue, page fallback integration, and tool do not.
+5. Produce independent, sequential architecture and results reports (planned).
+6. Canonicalize the grounded claims into a shallow validated contract (planned).
+7. Split the validated response into the two final JSON documents (planned).
 
 Missing or ambiguous scientific information must remain explicit. The
 pipeline must not replace it with plausible engineering defaults.
@@ -133,9 +146,26 @@ uv run antenna-extract convert-document runs/run_<id>
 The command requires successful page rendering. It validates the run, status,
 and pages manifest identities before contacting the endpoint.
 
+Extract figures after document conversion has succeeded:
+
+```bash
+uv run antenna-extract extract-figures runs/run_<id>
+uv run antenna-extract extract-figures runs/run_<id> --scale 3.0 --margin-pt 2.0
+```
+
+Extraction reads `document_conversion/document.md` and the preserved PDF under
+`input/`. It reads `<figcaption>` content and associates numeric figure labels
+with Docling candidates. PDFium renders each required page once for cropping.
+`--scale` controls PDFium rendering, not Docling settings. The defaults are
+scale 3.0 and a 2-point margin bounded by the page, with limited manual evidence.
+
+Docling performs local model inference and may download model weights on first
+use. This command does not require institutional model endpoint configuration.
+Docling image generation is disabled; PDFium produces the final PNGs.
+
 ## Run artefacts
 
-After successful document conversion, the run has this structure:
+After document conversion and figure extraction complete, the run contains:
 
 ```text
 run_<id>/
@@ -147,11 +177,14 @@ run_<id>/
 │   ├── pages.json
 │   ├── page_0001.png
 │   └── ...
-└── document_conversion/
-    ├── document.md
-    ├── nuextract3_raw_response_batch_0001.json
-    ├── nuextract3_trace_batch_0001.json
-    └── ...
+├── document_conversion/
+│   ├── document.md
+│   ├── nuextract3_raw_response_batch_0001.json
+│   ├── nuextract3_trace_batch_0001.json
+│   └── ...
+└── figures/
+    ├── manifest.json
+    └── figure_<number>.png
 ```
 
 `manifest.json` records stable run and source-document identity. `status.json`
@@ -162,6 +195,11 @@ and checksums.
 The `document_conversion` directory contains the combined Markdown and the
 diagnostic artefacts for each batch. Batch numbers are one-based and
 zero-padded to four digits.
+
+`figures/manifest.json` records source identity, settings, timings, caption
+associations, original candidates, and unresolved reasons. PNGs are written
+only for renderable associations. A figure ID or label does not guarantee a
+materialized PNG; `relative_path` can be null.
 
 ## Batching and failure behaviour
 
@@ -194,15 +232,30 @@ resolution from 200 DPI to 170 DPI reduced the input size but did not solve
 every larger-paper failure. Sequential batches completed larger papers that
 had previously ended with `finish_reason="length"`.
 
+Figure extraction requires successful document conversion, a `pending`
+`figure_extraction` state, and no existing `figures/` output. These preflight
+rejections leave lifecycle state unchanged. Exceptions after the phase starts
+record a failure, preserving existing partial artefacts. There is no automatic
+retry or implemented rerun/reset command.
+
+A completed extraction may contain unresolved entries, even without any PNGs.
+`succeeded` means the operation and manifest persistence completed, not that
+every crop has passed visual review.
+
 ## Current limitations
 
 - `document.md` has no reliable page markers. Page identity remains in
   `pages/pages.json`.
 - Batch boundaries are mechanical and may need manual review.
-- Separate figure files are not produced.
-- Rendered full-page images are the available visual assets.
-- Safe asset resolution and consumer-specific package validation are deferred
-  until Phase 3 has a concrete consumer.
+- Label matching checks uniqueness, not semantic caption equivalence or crop
+  quality. Manual visual review remains necessary.
+- Docling can merge regions containing neighbouring figures, text, or tables,
+  or split a compound figure into uncaptioned subfigures. The implementation
+  does not automatically repair these layouts or reject all problematic crops.
+- The owner confirmed one real recovery case; this is not universal layout
+  validation. Detailed evidence and limitations are recorded in the roadmap.
+- Figure and page files are available, but the minimal catalogue, page fallback
+  integration, safe resolver, and bounded inspection tool are still planned.
 - Architecture extraction, results extraction, canonicalization, and final
   JSON generation are not implemented.
 
@@ -216,7 +269,8 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-Default tests use fake clients and do not contact the institutional endpoint.
+Normal tests mock Docling conversion and remote model clients. They must not
+trigger model inference, endpoint calls, or model-weight downloads.
 
 ## Repository guidance
 
