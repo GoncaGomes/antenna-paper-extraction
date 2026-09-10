@@ -1,10 +1,10 @@
 # Antenna Extraction v3 - Architectural Decision
 
-**Status:** Phase 3 initialization
+**Status:** Phase 3 in progress; 03B implemented, pending owner review and intermediate merge
 
 **Version:** 3.1-draft
 
-**Date:** 2026-09-04
+**Date:** 2026-09-10
 
 **Scope:** extraction of antenna architecture and reported results from one scientific paper
 
@@ -42,7 +42,8 @@ pipeline**:
 1. NuExtract3 converts the complete ordered page sequence into a
    loss-preserving `DocumentPackage` through sequential batches.
 2. A separate figure-extraction step uses the converted Markdown and preserved
-   PDF to prepare figure assets and a minimal visual catalogue.
+   PDF to prepare figure assets. A minimal visual catalogue and safe inspection
+   boundary follow as separate work.
 3. An architecture agent reads the complete Markdown and requests only the
    visual assets it needs.
 4. A results agent independently reads the same package and requests only the
@@ -51,6 +52,13 @@ pipeline**:
    flexible final contract.
 6. Deterministic code validates the contract and splits it into two final JSON
    documents.
+
+Phases 1 and 2 are merged. Figure preparation, including conservative caption
+recovery, is implemented in 03B on `feat/asset-inspection`, pending an
+intermediate merge. The minimal catalogue, page fallback integration, safe
+resolver, bounded interaction, and real multimodal protocol validation remain
+unimplemented. Scientific agents, canonicalization, final outputs, and the
+end-to-end runner are future work.
 
 The difficult scientific tasks are separated by purpose. The architecture
 agent does not have to enumerate every reported result, and the results agent
@@ -194,7 +202,7 @@ NuExtract3 document-conversion phase
   - consecutive batches of up to 8 pages
     |
     v
-Separate figure extraction (planned Phase 3)
+Separate figure extraction (implemented 03B, merge pending)
   - reads document_conversion/document.md and the preserved PDF
   - Docling local layout inference; pypdfium2 region rendering
     |
@@ -204,15 +212,18 @@ DocumentPackage
   - source manifest and lifecycle status
   - pages/pages.json
   - complete document.md
-  - figures/ images and one small JSON manifest
-  - ordered page images as visual fallback
+  - figures/manifest.json and materialized figure PNGs where resolved
+  - ordered page images prepared for future fallback
   - per-batch raw responses
   - per-batch traces for successful parses
+    |
+    v
+Minimal visual catalogue, page fallback, and safe resolver (planned)
     |
     +------------------------------+
     |                              |
     v                              v
-Architecture agent run            Results agent run
+Architecture agent (planned)      Results agent (planned)
   reads complete Markdown           reads complete Markdown
   and minimal visual catalogue      and minimal visual catalogue
   may request exact assets           may request exact assets
@@ -221,12 +232,12 @@ Architecture agent run            Results agent run
     +---------------+--------------+
                     |
                     v
-Canonicalization call
+Canonicalization call (planned)
   reads both reports + identity metadata
   organizes, does not reinterpret source
                     |
                     v
-Deterministic validation and split
+Deterministic validation and split (planned)
         |                           |
         v                           v
 antenna_architecture.json   antenna_results.json
@@ -252,8 +263,10 @@ It is responsible for:
 - creating a place for phase status, traces, reports, and failures.
 
 It performs no document interpretation and no page selection. Ordered full-page
-renders are the current visual assets. They provide the visual fallback for
-compound figures, scanned papers, and content that Markdown cannot represent.
+renders remain available alongside the later figure PNGs. Their integration as
+fallback assets is planned. Run status supports `figure_extraction`, initially
+`pending`; older status files without this phase load with that default.
+Figure extraction runs separately after successful document conversion.
 
 ## 8. Phase B - NuExtract3 document conversion
 
@@ -278,8 +291,7 @@ B = ceil(page_count / 8)
 
 ### 8.3 Required output
 
-The current `DocumentPackage` is the set of run artefacts produced by Phases 1
-and 2:
+The Phase 1 and Phase 2 `DocumentPackage` consists of:
 
 - `manifest.json`, which records source and run identity;
 - `status.json`, which records lifecycle state;
@@ -290,6 +302,10 @@ and 2:
 - one trace for each successfully parsed batch response.
 
 There is no additional unified package manifest in Phase 2.
+
+The implemented 03B increment adds `figures/manifest.json` and
+`figures/figure_<number>.png` where an association can be rendered. This
+extends the artefact set, not a unified package or consumer validation schema.
 
 ### 8.4 Markdown policy
 
@@ -313,38 +329,52 @@ does not insert page ID markers. Page identity remains in `pages/pages.json`.
 
 ### 8.5 Figure policy
 
-Phase 2 does not materialize figure files. Phase 3 explicitly replaces the
-page-only consumer boundary with preferred figure assets and full-page
-fallback. Figure extraction is a separate step after document conversion,
-because it reads `document_conversion/document.md`; it is not part of
-`render-pages`.
+03B implements `extract-figures` after successful document conversion. It reads
+the complete `document_conversion/document.md` and the preserved PDF under
+`input/`; it is not part of `render-pages`. Runs have sibling `input/`,
+`pages/`, `document_conversion/`, and `figures/` directories. This replaces the
+obsolete page-only preparation boundary. Preferred figures with page fallback
+remain the intended consumer policy; fallback integration is still pending.
 
-The intended run has sibling `input/`, `pages/`, `document_conversion/`, and
-`figures/` directories. `figures/` contains images and one small JSON manifest;
-its exact filename and schema are left to implementation.
+The implementation reads `<figcaption>` content from Markdown and recognizes
+numeric labels starting with `Figure`, `Fig`, or `Fig.`, case-insensitively.
+It matches normalized original figure numbers, never crop order. Exactly one
+Markdown caption and one Docling picture candidate are required for a resolved
+label association; the selected caption comes from Markdown. This checks
+uniqueness, not semantic caption equivalence or visual crop quality. Missing,
+duplicate, and unrecognized associations remain explicit.
 
-Docling detects figure regions and captions. Prefer its existing caption
-associations. Retain uncaptioned image candidates until association recovery
-has been attempted. Recovery may use a conservative geometric rule only for
-an unambiguous match on the same page. This limited rule requires validation;
-selection is structural, never based on scientific relevance.
+Existing Docling caption associations take precedence. Uncaptioned candidates
+are retained while conservative geometric recovery is attempted. Recovery
+requires all of the following:
 
-Match figures to Markdown captions by their original label, such as “Fig. 8”,
-never by crop index or file order. Use the Markdown caption only when the
-match is unique and coherent. Preserve the original Docling caption and
-association provenance, and record missing or ambiguous matches explicitly.
+- a `TextItem` classified as `CAPTION` with a recognized figure label;
+- exactly one provenance region each for caption and picture, on the same page;
+- valid finite `BOTTOMLEFT` coordinates for both;
+- the caption below the picture, with a gap of 0 to 30 PDF points inclusive;
+- horizontal overlap covering at least 80% of the caption width;
+- a unique geometric match in both directions and a non-duplicated caption label;
+- no replacement of existing links or labels, including already-linked captions.
 
-Use pypdfium2 to render regions from the preserved original PDF, not the
-existing 170-DPI page PNGs. Render each required page once per figure-extraction
-execution and reuse it for its regions. Keep complete compound figures
-together; do not create table or equation crops. Preserve the source-page
-relationship and metadata needed for safe asset resolution.
+Original Docling objects remain unchanged. Selection is structural, not based
+on scientific relevance. Recovery is limited to `BOTTOMLEFT`; crop rendering
+also supports `TOPLEFT`, which does not extend recovery support.
 
-Scale 3.0 and a 2-point margin worked in the reported experiments. They are
-initial settings to validate, not accepted production defaults. These findings
-are experimental evidence, not implemented repository capabilities. Manual
-visual review of crops and associations and end-to-end latency measurement,
-including local layout inference and rendering, are required for acceptance.
+pypdfium2 renders each required page once per extraction execution from the
+preserved original PDF, never from existing 170-DPI PNGs. It produces the final
+PNGs with a page-bounded margin. Current defaults are scale 3.0 and a 2-point
+margin, baseline settings with limited manual evidence, not universally
+validated settings. `--scale` controls PDFium, not Docling. Docling uses
+`images_scale=3.0` with picture and page image generation disabled.
+
+The intended policy keeps complete compound figures together and has no
+dedicated table or equation crop path. Inaccurate Docling regions can include
+neighbouring text, tables, or other figures, or split subfigures into separate
+uncaptioned candidates. Current crops do not all satisfy the intended boundary.
+PNG existence and label uniqueness do not certify quality. Manual review and
+end-to-end latency measurement remain required. The roadmap records supplied
+manual evidence, including one owner-confirmed recovery, without claiming
+universal validation or reproduction during this documentation update.
 
 ### 8.6 Manifest policy
 
@@ -353,9 +383,24 @@ not create a new unified `DocumentPackage` manifest. The source manifest ties
 the run to the preserved PDF. The pages manifest records ordered page
 identifiers, paths, dimensions, sizes, checksums, and rendering settings.
 
-Safe asset resolution and consumer-specific package validation belong in Phase
-3, when the first concrete asset consumer is implemented. That phase should
-build on the existing manifests and add only the boundary its consumer needs.
+03B writes `figures/manifest.json` with `schema_version`, `document_id`,
+`source_pdf`, and `markdown_path`; Docling/core and PDFium versions; Docling
+image settings; rendering scale and margin; and `timings_seconds` for
+`docling`, `association`, and `figure_rendering`.
+
+Each entry records `figure_id`, `label`, `relative_path`, selected `caption`,
+and `caption_source` (`markdown` or null). `association_method` is `docling`,
+`geometric_recovery`, or null. `markdown_captions` preserves source captions;
+`candidates` preserves `docling_ref`, `caption_docling`, `caption_refs`, and
+provenance `positions`. Optional `caption_recovery` records recovered `text`,
+`docling_ref`, `positions`, and `distance_pt`. `unresolved_reason` records
+association or rendering limitations.
+
+A label or figure ID does not guarantee a PNG. Even a unique association with
+a selected caption may have a null `relative_path` if its region cannot be
+rendered. This manifest is an audit artefact, not an implemented minimal visual
+catalogue, safe resolver, or consumer validation schema. Those remain Phase 3
+work built on the existing figure and page artefacts.
 
 ### 8.7 Completion condition
 
@@ -371,6 +416,10 @@ configurable `max_tokens`.
 
 ## 9. Phase C - bounded visual-asset inspection
 
+This section describes planned behaviour. The catalogue, page fallback
+integration, safe resolver, bounded controller, and real multimodal protocol
+validation are not implemented in 03B.
+
 ### 9.1 Why a tool is used
 
 Passing every page image to every agent increases context pressure and makes it
@@ -381,6 +430,14 @@ Each future scientific agent receives the complete Markdown and a minimal
 visual catalogue with declared figure and page IDs, captions and source-page
 links where available. Figures are preferred; full pages remain available as
 fallback when the text or figure assets are insufficient.
+
+The next increment builds on existing page PNGs and `pages/pages.json`, while
+pausing expansion of automatic region repair and subfigure grouping. Full-page
+requests must remain possible even when a figure PNG exists. Attach a fallback
+page reference only when source provenance supports it; a Markdown label alone
+does not establish a page. Unknown page relationships remain unresolved.
+Representation or withholding of known problematic crops is a pending consumer
+decision; automatic rejection is not implemented.
 
 ### 9.2 Tool responsibility
 
@@ -403,6 +460,9 @@ and state a focused question for each request.
 
 After the assets are returned, the same scientific model interprets them and
 must finish its report. It cannot open an unbounded observe-act loop.
+
+Figure and page requests must fit in this same round. Page fallback does not
+introduce a second inspection round or a fallback model.
 
 If benchmark evidence later shows that one round is systematically
 insufficient, the limit may be revisited explicitly. It is not silently raised
@@ -670,6 +730,12 @@ Docling's local layout inference is a separate, explicit preprocessing cost,
 outside this endpoint-call budget and outside the deterministic inspection
 tool. Record its cost separately and include it in end-to-end latency.
 
+The implemented `extract-figures` command requires no institutional endpoint
+configuration. Docling may download model weights on first use. Docling
+processing and figure-rendering timings are recorded separately; extraction lifecycle
+elapsed time is available from status timestamps. These are not timings from
+run initialization or NuExtract3 conversion. End-to-end measurement is pending.
+
 ## 15. Evidence, provenance, and auditability
 
 The implemented Phase 2 trace records the requested model, temperature, mode,
@@ -685,6 +751,11 @@ Phase 2 refuses to overwrite existing conversion outputs. A later acceptance
 boundary may define a package identity or immutability rule when a concrete
 consumer requires it.
 
+03B preserves original Markdown captions, Docling candidates, links, positions,
+and recovery provenance in the figure manifest. It verifies the preserved PDF
+identity and keeps missing associations or unrenderable regions explicit.
+Neither association provenance nor operation success constitutes visual approval.
+
 Evidence references must remain source-faithful. Normalizing a unit or name in
 the final JSON must not erase the exact wording or value reported by the paper.
 
@@ -692,11 +763,23 @@ the final JSON must not erase the exact wording or value reported by the paper.
 
 The baseline has no automatic retries.
 
+Implemented figure extraction requires successful document conversion, its own
+`pending` lifecycle state, valid rendering settings, matching run identity, and
+no existing `figures/` output. Preflight rejections do not start the phase.
+After it starts, exceptions record `failed` with the failing stage and preserve
+partial artefacts. A run may finish as `succeeded` with unresolved entries or
+no PNGs: success records operation completion and manifest persistence, not
+visual acceptance. There is no implemented automatic retry or rerun/reset
+command.
+
+Document conversion stops at the first failed batch. It preserves raw responses
+already received and traces for successfully parsed batches, but does not write
+the final `document.md`.
+
+The following downstream continuation rules remain planned:
+
 - If run initialization or document conversion fails, both scientific agents
   and canonicalization are skipped.
-- Document conversion stops at the first failed batch. It preserves raw
-  responses already received and traces for successfully parsed batches, but
-  it does not write the final `document.md`.
 - If the architecture agent fails, its failure is preserved and the independent
   results agent may still run sequentially.
 - If the results agent fails, a successful architecture report remains valid.
@@ -728,6 +811,12 @@ selector precedes conversion.
 Each phase below is intended to have its own ChatGPT Project chat and its own
 short-lived Git branch. The phase chat may contain several small commits, but
 only one commit is implemented and reviewed at a time.
+
+Phase 3 is deliberately subdivided: the completed 03B figure-extraction scope
+is prepared for owner review and an intermediate merge. That merge is pending
+and will not complete Phase 3. Continuation is `03C - Bounded asset inspection`;
+after the merge, the owner selects its branch from the accepted state. Do not
+prescribe continuing on a deleted branch. All Git mutations remain owner work.
 
 | Phase | Suggested chat | Architectural outcome |
 | --- | --- | --- |
@@ -784,8 +873,8 @@ without new empirical evidence:
 The following are decided in their named phase, from tests and benchmark
 evidence:
 
-- the figure manifest filename and minimal schema;
-- validated geometric recovery parameters and figure rendering settings;
+- broader validation of the implemented recovery thresholds and rendering defaults;
+- representation or withholding of known problematic crops at the consumer boundary;
 - the consumer-specific validation boundary for package artefacts;
 - the minimal package view needed for safe asset routing;
 - the endpoint's tool-call and image-result protocol;
@@ -795,7 +884,7 @@ evidence:
   scientific role;
 - which model canonicalizes most faithfully;
 - the minimal shallow final JSON contract;
-- the exact CLI surface;
+- the CLI surface for future inspection and pipeline commands;
 - whether explicit single-phase rerun support is needed after baseline use.
 
 Deferred does not mean “build an abstraction now.” The smallest implementation

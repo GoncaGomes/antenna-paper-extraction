@@ -2,7 +2,7 @@
 
 - **Status:** active execution plan
 - **Version:** 3.1-draft
-- **Date:** 2026-09-04
+- **Date:** 2026-09-10
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
 - **Current implementation phase:** Phase 3 - Bounded asset inspection
 
@@ -89,7 +89,7 @@ v3 code:
 
 ### 3.3 Keep `main` stable
 
-For every phase:
+The repository owner controls the normal branch sequence for each phase:
 
 1. Start from the latest accepted `main`.
 2. Create the phase branch named in this roadmap.
@@ -99,6 +99,13 @@ For every phase:
 6. Merge the phase branch into `main`.
 7. Delete the short-lived branch after the merge.
 8. Create the next branch from the updated `main`.
+
+Phase 3 deliberately permits an intermediate merge of the completed 03B
+figure-extraction increment before the full phase gate passes. This update
+prepares owner review; the intermediate merge is pending. It closes that
+increment, not Phase 3. The owner controls the continuation branch after the
+merge, starting from the accepted state; continuation must not assume that a
+deleted branch remains available. No agent performs Git mutations.
 
 Tags preserve important milestones. Long-lived feature branches should not be
 used as substitutes for tags or documentation.
@@ -129,11 +136,13 @@ working vertical slices.
 | 7 | `07 - End-to-end runner` | `feat/end-to-end` | One sequential end-to-end command |
 | 8 | `08 - Scientific benchmark and baseline` | `test/scientific-benchmark` | Measured baseline and release tag recommendation |
 
-One phase is one principal discussion boundary. If a phase proves too large,
-split the implementation work into commits inside the same chat before
-creating another architectural phase. If chat context becomes genuinely
-unmanageable, use a clearly named continuation such as `04B`, carry forward
-the handoff record, and remain on the same branch and phase.
+One phase is one principal discussion boundary, with named continuation chats
+and intermediate increments when explicitly agreed. Phase 3 continues from
+03B figure extraction to `03C - Bounded asset inspection`. The latter covers
+the remaining Phase 3 work, not a new architectural phase. Carry the handoff
+record across the pending intermediate merge; the owner chooses the
+continuation branch. The table describes full phase outcomes, not completed
+work or a requirement to retain the same branch after a merge.
 
 ## 5. Rules for every phase chat
 
@@ -459,7 +468,7 @@ needed for inspection. Phase 2 does not perform scientific extraction.
 - Batch conversion completed larger papers that had previously ended with
   `finish_reason="length"`.
 - Model-generated page ID markers are not reliable enough to use.
-- The implementation does not produce separate figure binaries.
+- The Phase 2 implementation does not produce separate figure binaries.
 
 These findings describe observed behaviour. The repository does not record
 timings, token counts, quality scores, or formal content-quality acceptance for
@@ -493,7 +502,7 @@ configurable `max_tokens`.
 
 ### 10.4 Phase 2 artefact contract
 
-The current `DocumentPackage` is the set of existing run artefacts:
+The merged Phase 2 `DocumentPackage` has the following artefact contract:
 
 ```text
 run_<id>/
@@ -563,38 +572,40 @@ assertions exist.
 
 The user should understand the observed NuExtract3 protocol, why the context
 limit required source-ordered batching, how diagnostic artefact timing supports
-failure analysis, and why page images plus existing manifests are the current
-package boundary.
+failure analysis, and why page images plus existing manifests formed the
+Phase 2 package boundary.
 
 ## 11. Phase 3 - bounded asset inspection
 
-- **Chat:** `03 - Bounded asset inspection`
-- **Branch:** `feat/asset-inspection`
-- **Model calls:** one without inspection, or two plus one tool execution with inspection
+- **Chat:** 03B figure extraction; continuation `03C - Bounded asset inspection`
+- **Current branch:** `feat/asset-inspection`; continuation branch controlled by owner
+- **Planned agent calls:** one without inspection, or two plus one tool execution with inspection
 - **Preprocessing cost:** separate, explicit Docling local layout inference
-- **Status:** not started
+- **Status:** in progress; 03B implemented, pending owner review and intermediate merge
 
 ### 11.1 Objective
 
 Extract figures after document conversion, then implement safe asset resolution
 and bounded inspection using the complete Markdown and a minimal visual
-catalogue. Figures are preferred; full pages remain available as fallback.
-Figure extraction and Phase 3 are not implemented. Architecture Agent, Results
-Agent, canonicalization, and final outputs remain outside this batch's scope.
+catalogue. Figures are the preferred intended assets, with page fallback still
+to be integrated. 03B figure extraction is implemented. The minimal catalogue,
+safe figure/page resolver, bounded tool interaction, and real multimodal
+protocol validation remain pending. Architecture Agent, Results Agent,
+canonicalization, final outputs, and the end-to-end runner remain future work.
 
 ### 11.2 Fixed decisions for this phase
 
 - figure extraction reads `document_conversion/document.md` and the preserved
   PDF in a separate step after conversion, never within `render-pages`;
 - runs have sibling `input/`, `pages/`, `document_conversion/`, and `figures/`
-  directories; `figures/` holds images and one small JSON manifest;
+  directories; `figures/` holds materialized images and `manifest.json`;
 - Docling detects regions and captions; existing caption associations take
   precedence over conservative geometric recovery, which requires an
   unambiguous same-page match and validation;
 - uncaptioned candidates remain available until recovery is attempted;
   selection is structural, not based on scientific relevance;
 - match Markdown captions by original figure label, such as “Fig. 8”, never
-  by crop index or file order; use only unique, coherent Markdown matches,
+  by crop index or file order; require one Markdown caption and one candidate,
   preserve original Docling captions and association provenance, and record
   missing or ambiguous matches explicitly;
 - pypdfium2 renders from the preserved original PDF, not 170-DPI page PNGs;
@@ -608,9 +619,10 @@ Agent, canonicalization, and final outputs remain outside this batch's scope.
 - one scientific agent run has at most one tool round;
 - no semantic search, similarity ranking, or automatic page selection occurs.
 
-Reported experiments found scale 3.0 and a 2-point margin useful. These are
-initial settings to validate, not implemented or accepted production defaults.
-Manual visual review and end-to-end latency measurement remain required.
+Scale 3.0 and a 2-point margin are implemented baseline defaults with limited
+manual evidence. Label uniqueness does not check semantic caption equivalence
+or validate crops. Manual visual review and end-to-end latency measurement
+remain required; current extraction timings do not satisfy the latter gate.
 
 ### 11.3 Questions to decide in this chat
 
@@ -619,36 +631,104 @@ Manual visual review and end-to-end latency measurement remain required.
 - maximum assets and payload per one round based on the endpoint probe;
 - how the endpoint represents image tool results;
 - how invalid, oversized, or duplicate requests are reported;
-- exact figure manifest filename and minimal schema;
-- geometric recovery parameters and acceptance cases;
-- validation of initial rendering settings on representative papers.
+- the minimal catalogue and consumer validation boundary, including how known
+  problematic crops are represented or withheld;
+- provenance-supported page fallback for unresolved or unreliable figures;
+- broader validation of rendering defaults and recovery limits.
 
-### 11.4 Candidate commit 3A - extract figures after document conversion
+`figures/manifest.json`, `extract-figures`, `--scale`, `--margin-pt`, and the
+implemented recovery thresholds are settled for 03B (section 11.4).
 
-Suggested message:
+### 11.4 Implemented increment 03B - figure extraction and caption recovery
 
-```text
-feat(document): extract traceable figures after conversion
-```
+Implemented on `feat/asset-inspection` at inspected HEAD
+`5e1caae7f6a898b554d6a6fe787c19cbcee43588`. This is an implementation commit,
+not a merge SHA. The bounded 03B scope is closed for documentation handoff and
+owner review, with an intermediate merge pending. Full Phase 3 is not complete.
 
-Behaviour and acceptance evidence:
+Implemented behaviour:
 
-- require successful conversion and its Markdown before extraction;
-- implement the detection, association, label matching, and rendering decisions
-  in section 11.2, with inspectable failures and atomic artefact persistence;
-- test existing and recovered associations, uncaptioned candidates, duplicate
-  or missing labels, ambiguous geometry, and crop order differing from labels;
-- test source-page links, crop bounds, complete compound figures, PDF-based
-  rendering, and one render per required page per execution;
-- manually review representative crops and caption associations against the
-  original PDF and Markdown, including unresolved cases;
-- measure end-to-end preprocessing latency from run initialization through
-  figure persistence, separating conversion, Docling inference, and rendering.
+- `extract-figures` reads complete `document_conversion/document.md` and the
+  preserved PDF under `input/` after successful document conversion;
+- `--scale` controls PDFium rendering, default 3.0; `--margin-pt` defaults to
+  2.0 and is bounded by the page. Docling image generation is disabled;
+- Markdown `<figcaption>` content is matched by normalized numeric `Figure`,
+  `Fig`, or `Fig.` labels, requiring one caption and one candidate;
+- existing Docling associations take precedence. Missing associations may be
+  recovered from recognized `CAPTION` TextItems with one region each, valid
+  `BOTTOMLEFT` coordinates, the same page, a caption below the picture at a
+  0 to 30-point inclusive gap, and at least 80% caption-width overlap;
+- recovery requires unique geometric matches in both directions and a unique
+  caption label, protects existing links and labels, and leaves Docling objects
+  unchanged. Crop support for `TOPLEFT` does not extend recovery support;
+- pypdfium2 renders once per required page from the original PDF and persists
+  `figures/figure_<number>.png` only for renderable associations;
+- `figures/manifest.json` preserves source identity and paths, library versions,
+  settings, timings, selected Markdown captions, original captions, candidate
+  references and positions, recovery provenance, and unresolved reasons;
+- `association_method` distinguishes `docling`, `geometric_recovery`, and null.
+  A figure ID, selected caption, or label does not guarantee a non-null PNG path;
+- lifecycle is `pending` to `running` to `succeeded` or `failed`. Older status
+  files without `figure_extraction` load it as pending. Other phases survive
+  these transitions;
+- extraction rejects invalid prerequisites and existing output before starting.
+  Exceptions after start record failure and preserve partial files. There is
+  no automatic retry or implemented rerun/reset command;
+- `succeeded` records completion and manifest persistence, including all-unresolved
+  results, not visual approval. There is no automatic crop-quality rejection;
+- Docling performs local inference and may download weights on first use;
+  extraction requires no institutional endpoint configuration.
 
-Use local fixtures for normal tests. Experimental success alone does not
-satisfy the implementation gate.
+Automated coverage includes caption parsing and normalization, label matching
+independent of order, missing and duplicate matches, recovery thresholds and
+ambiguity, original-object preservation, crop coordinates and page reuse,
+unrenderable entries, manifest persistence, partial failures, lifecycle
+compatibility, and CLI arguments and errors. Tests mock Docling conversion and
+remote clients, with synthetic PDFs for rendering. They must not trigger model
+inference, endpoint calls, or weight downloads.
 
-### 11.5 Candidate commit 3B - validate and resolve package assets safely
+Manual evidence supplied from run artefacts and owner feedback, not reproduced
+during this documentation update. Counts and layout reviews below precede
+geometric recovery; the later owner confirmation for article 001 is identified
+separately:
+
+- `001_rectangular_patch_coaxial.pdf`: before recovery, 8 PNGs for 9 numbered
+  figures. Figure 8 had a Markdown caption and a separate uncaptioned Docling
+  candidate, `#/pictures/6`, on page 4. After recovery was integrated, the owner
+  confirmed Figure 8 was recovered and all nine numbered figures were extracted.
+  This is one successful real case, not universal layout validation.
+- `002_circular_slotted_triangular_patch.pdf`: 4 PNGs for 4 numbered figures;
+  review found no equivalent failure. Compound Figures 1 and 4 retained panels.
+- `003_5g_microstrip_patch_28ghz.pdf`: 8 PNGs for 8 numbered figures;
+  review found no equivalent failure.
+- `004_microstrip_patch.pdf`: 13 PNGs for 16 numbered figures; Figures 1, 7,
+  and 15 were unresolved. On page 3, `figure_2.png` included Figure 1, text,
+  Table 1, and Figure 2. On page 6, `figure_8.png` included Figure 7, Table 2,
+  and Figure 8. On page 7, `figure_9.png` included surrounding text. Figure 15
+  on page 10 was split into three uncaptioned candidates. There is no confirmed
+  post-recovery rerun result for this article.
+
+The earlier four pre-recovery runs recorded approximate seconds:
+
+| Article | Docling | Figure rendering | Extraction lifecycle elapsed |
+| --- | ---: | ---: | ---: |
+| 001 | 79.15 | 0.71 | 79.89 |
+| 002 | 43.32 | 0.39 | 43.73 |
+| 003 | 102.89 | 0.49 | 103.42 |
+| 004 | 127.40 | 1.43 | 128.86 |
+
+Figure rendering includes the renderer wrapper, cropping, and persistence.
+These are extraction-only measurements, not end-to-end timings from run
+initialization or NuExtract3 conversion, and not a benchmark.
+
+Known limits are merged regions, surrounding content, split subfigures,
+unresolved associations, and limited manual validation. Complete compound
+figures remain the intended policy, with no dedicated table/equation crop
+path; inaccurate Docling regions can still include tables or other content.
+Pause expansion of automatic region repair and subfigure grouping. Continue
+with the consumer boundary, preserving these limitations explicitly.
+
+### 11.5 Pending increment - minimal catalogue and safe figure/page resolution
 
 Suggested message:
 
@@ -660,6 +740,14 @@ Behaviour:
 
 - depend on accepted figure extraction and the existing page manifest;
 - define and validate the minimal visual catalogue and asset boundary;
+- build on existing page PNGs and `pages/pages.json`; allow page requests even
+  when a figure PNG exists, since a crop can be incomplete or contain unrelated
+  content;
+- attach a fallback page reference only when source provenance supports it;
+  Markdown labels alone do not establish pages, and unknown links stay unresolved;
+- decide how known problematic crops are represented or withheld. Neither PNG
+  existence nor label uniqueness certifies quality; automatic rejection is not
+  implemented and its policy remains undecided;
 - load only package artefacts that satisfy that boundary;
 - accept exact declared identifiers;
 - enforce count and payload limits;
@@ -676,11 +764,12 @@ Tests:
 - payload and count limits;
 - deterministic ordering;
 - altered asset hash;
-- no file access outside the package.
+- no file access outside the package;
+- page requests despite existing figure PNGs and unresolved page relationships.
 
 Keep the figure manifest small and add only metadata needed by this consumer.
 
-### 11.6 Candidate commit 3C - enforce one tool round
+### 11.6 Pending increment - enforce one tool round
 
 Suggested message:
 
@@ -699,6 +788,9 @@ Behaviour:
 - reject a second tool request;
 - record model-call and tool-execution counts explicitly.
 
+Figure and page requests share the same permitted round. Asset fallback adds
+neither a second inspection round nor a fallback model.
+
 Tests with a scripted fake model:
 
 - one-turn final response with no tool;
@@ -711,7 +803,7 @@ Tests with a scripted fake model:
 - exactly zero or one deterministic tool execution;
 - all raw responses and tool traces survive failure.
 
-### 11.7 Candidate commit 3D - verify the real multimodal protocol
+### 11.7 Pending increment - verify the real multimodal protocol
 
 Suggested message:
 
@@ -728,11 +820,14 @@ Scope:
 - record observed protocol, image limits, latency, and call count;
 - keep production selection open until Phase 4.
 
-The user runs the probe manually against the institutional endpoint. The repo
-contains the reproducible probe and redacted observations, not credentials or
-unreviewed output dumps.
+The owner will run the future probe manually against the institutional
+endpoint. The pending increment must add a reproducible probe and redacted
+observations, not credentials or unreviewed output dumps.
 
 ### 11.8 Phase 3 completion gate
+
+Not passed. Completion of 03B and its intended intermediate merge do not satisfy
+the remaining catalogue, resolver, interaction, protocol, and latency gates.
 
 - separate post-conversion extraction produces figure images and one small
   manifest in `figures/`, with source-page links and safe resolution metadata;
@@ -1495,8 +1590,9 @@ measured failure becomes the input to the next architectural decision.
 
 ### 17.1 Default local tests
 
-Default tests do not contact remote models. They use deterministic fixtures and
-scripted fake responses for:
+Default tests mock Docling conversion and remote model clients. They must not
+trigger inference, endpoint calls, or weight downloads. The cross-phase test
+strategy uses deterministic fixtures and scripted fake responses for:
 
 - run identity and artefact persistence;
 - page order and rendering metadata;
@@ -1804,12 +1900,24 @@ Phase 1 is complete and was integrated into `main` with squash merge
 and was merged into `main` with squash merge
 `d88ba548f32254edd97ba10f7c90e4e74393d083`.
 
+03B figure extraction and conservative caption recovery are implemented at
+`5e1caae7f6a898b554d6a6fe787c19cbcee43588` on `feat/asset-inspection`.
+The owner confirmed recovery of article 001's missing Figure 8; merged-region
+and split-subfigure limitations remain, with no confirmed post-recovery result
+for article 004. Section 11.4 records the supplied evidence and its limits.
+
 Next steps:
 
-1. Implement the separate post-conversion figure-extraction increment in 11.4.
-2. Review crops and associations manually and measure end-to-end latency.
-3. Proceed to safe asset resolution and bounded inspection in separate increments.
+1. Owner review of 03B and this documentation, followed by the intended
+   intermediate merge. No merge is recorded yet.
+2. Continue in `03C - Bounded asset inspection`, still within Phase 3, on the
+   continuation branch chosen by the owner after the merge.
+3. Implement the minimal catalogue, provenance-supported page fallback, and
+   safe figure/page resolution before scientific-agent work. Pause further
+   automatic region repair and subfigure grouping.
+4. Complete bounded interaction, real multimodal protocol validation, manual
+   visual review, and end-to-end latency measurement against the full gate.
 
-Phase 3 remains not started in executable code. This documentation batch
-records agreed decisions only; it does not implement scientific agents,
-canonicalization, or final outputs.
+Phase 3 remains in progress. Scientific agents, canonicalization, final
+outputs, and the end-to-end runner remain future work. This documentation
+update does not implement any of those pending capabilities.
