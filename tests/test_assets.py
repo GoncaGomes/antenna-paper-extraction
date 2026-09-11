@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from antenna_paper_extraction.assets import build_visual_catalog
+from antenna_paper_extraction.assets import (
+    AssetResolution,
+    build_visual_catalog,
+    resolve_visual_assets,
+)
 
 
 @pytest.fixture
@@ -297,3 +301,343 @@ def test_build_visual_catalog_rejects_manifest_symlink_outside_run(
 
     with pytest.raises(ValueError, match="escapes the run directory"):
         build_visual_catalog(run_dir)
+
+
+@pytest.fixture
+def available_assets(
+    run_dir: Path,
+    figure_entry: dict,
+) -> dict[str, bytes]:
+    _write_figures(run_dir, [figure_entry])
+
+    payloads = {
+        "figure_8": b"synthetic figure bytes",
+        "page_0001": b"synthetic first page bytes",
+        "page_0002": b"synthetic second page bytes",
+        "page_0003": b"synthetic third page bytes",
+    }
+
+    for asset_id, payload in payloads.items():
+        directory = "figures" if asset_id.startswith("figure_") else "pages"
+        (run_dir / directory / f"{asset_id}.png").write_bytes(payload)
+
+    return payloads
+
+
+@pytest.mark.parametrize(
+    "asset_ids",
+    [
+        ("figure_8",),
+        ("page_0002",),
+        ("figure_8", "page_0002"),
+        ("page_0002", "figure_8"),
+        ("page_0003", "page_0001"),
+    ],
+    ids=[
+        "figure",
+        "page-despite-existing-crop",
+        "mixed-figure-first",
+        "mixed-page-first",
+        "pages-in-requested-order",
+    ],
+)
+def test_resolve_visual_assets_returns_requested_images_in_order(
+    run_dir: Path,
+    available_assets: dict[str, bytes],
+    asset_ids: tuple[str, ...],
+) -> None:
+    results = resolve_visual_assets(
+        run_dir,
+        asset_ids,
+        max_assets=len(asset_ids),
+    )
+
+    assert results == tuple(
+        AssetResolution(
+            asset_id=asset_id,
+            status="available",
+            media_type="image/png",
+            image_bytes=available_assets[asset_id],
+            reason=None,
+        )
+        for asset_id in asset_ids
+    )
+
+
+def test_resolve_visual_assets_reads_only_requested_images(
+    run_dir: Path,
+    available_assets: dict[str, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read_bytes = Path.read_bytes
+    reads: list[Path] = []
+
+    expected_paths = [
+        (run_dir / "pages" / "page_0002.png").resolve(),
+        (run_dir / "figures" / "figure_8.png").resolve(),
+    ]
+
+    def record_read(path: Path) -> bytes:
+        assert path in expected_paths, f"Unexpected image read: {path}"
+        reads.append(path)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", record_read)
+
+    results = resolve_visual_assets(
+        run_dir,
+        ("page_0002", "figure_8"),
+    )
+
+    assert reads == expected_paths
+    assert results[0].image_bytes == available_assets["page_0002"]
+    assert results[1].image_bytes == available_assets["figure_8"]
+
+
+@pytest.mark.parametrize(
+    ("asset_ids", "max_assets", "message"),
+    [
+        ((), 6, "At least one asset"),
+        (("figure_8", "figure_8"), 6, "Repeated asset identifiers"),
+        (("figure_999",), 6, "Unknown visual asset"),
+        (("../outside.png",), 6, "Unknown visual asset"),
+        (("figure_8", "page_0002"), 1, "exceed the limit"),
+        (("figure_8",), 0, "must be positive"),
+        (("figure_8",), -1, "must be positive"),
+        ("figure_8", 6, "tuple of strings"),
+        ((8,), 6, "tuple of strings"),
+    ],
+)
+def test_resolve_visual_assets_rejects_invalid_requests_before_image_reads(
+    run_dir: Path,
+    available_assets: dict[str, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    asset_ids: object,
+    max_assets: object,
+    message: str,
+) -> None:
+    def reject_read(path: Path) -> bytes:
+        raise AssertionError(f"Invalid request attempted an image read: {path}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_read)
+
+    with pytest.raises(ValueError, match=message):
+        resolve_visual_assets(
+            run_dir,
+            asset_ids,
+            max_assets=max_assets,
+        )
+
+
+@pytest.mark.parametrize("max_assets", [1.5, True])
+def test_resolve_visual_assets_rejects_non_integer_limit(
+    run_dir: Path,
+    max_assets: float | bool,
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match="Maximum asset count must be an integer.",
+    ):
+        resolve_visual_assets(
+            run_dir,
+            ("figure_8",),
+            max_assets=max_assets,
+        )
+
+
+@pytest.mark.parametrize(
+    "figure_status",
+    ["unresolved", "ambiguous"],
+)
+def test_resolve_visual_assets_reports_unavailable_figure_without_fallback(
+    run_dir: Path,
+    figure_entry: dict,
+    available_assets: dict[str, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    figure_status: str,
+) -> None:
+    if figure_status == "unresolved":
+        figure_entry["relative_path"] = None
+        expected_reason = "Figure crop is not materialized."
+    else:
+        figure_entry["markdown_captions"] = [
+            "Figure 8. First caption.",
+            "Figure 8. Second caption.",
+        ]
+        expected_reason = "Figure association is ambiguous."
+
+    _write_figures(run_dir, [figure_entry])
+
+    def reject_read(path: Path) -> bytes:
+        raise AssertionError(f"Unavailable figure triggered an image read: {path}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_read)
+
+    results = resolve_visual_assets(run_dir, ("figure_8",))
+
+    assert results == (
+        AssetResolution(
+            asset_id="figure_8",
+            status="unavailable",
+            media_type=None,
+            image_bytes=None,
+            reason=expected_reason,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("missing_id", "relative_path", "remaining_id"),
+    [
+        ("figure_8", "figures/figure_8.png", "page_0002"),
+        ("page_0002", "pages/page_0002.png", "figure_8"),
+    ],
+)
+def test_resolve_visual_assets_preserves_available_results_when_file_is_missing(
+    run_dir: Path,
+    available_assets: dict[str, bytes],
+    missing_id: str,
+    relative_path: str,
+    remaining_id: str,
+) -> None:
+    (run_dir / relative_path).unlink()
+
+    results = resolve_visual_assets(
+        run_dir,
+        (missing_id, remaining_id),
+    )
+
+    assert results == (
+        AssetResolution(
+            asset_id=missing_id,
+            status="unavailable",
+            media_type=None,
+            image_bytes=None,
+            reason="Asset file is missing or is not a regular file.",
+        ),
+        AssetResolution(
+            asset_id=remaining_id,
+            status="available",
+            media_type="image/png",
+            image_bytes=available_assets[remaining_id],
+            reason=None,
+        ),
+    )
+
+
+def test_resolve_visual_assets_reports_directory_as_unavailable(
+    run_dir: Path,
+    available_assets: dict[str, bytes],
+) -> None:
+    image_path = run_dir / "figures" / "figure_8.png"
+    image_path.unlink()
+    image_path.mkdir()
+
+    results = resolve_visual_assets(run_dir, ("figure_8",))
+
+    assert results == (
+        AssetResolution(
+            asset_id="figure_8",
+            status="unavailable",
+            media_type=None,
+            image_bytes=None,
+            reason="Asset file is missing or is not a regular file.",
+        ),
+    )
+
+
+def test_resolve_visual_assets_preserves_other_results_after_read_failure(
+    run_dir: Path,
+    available_assets: dict[str, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read_bytes = Path.read_bytes
+    figure_path = (run_dir / "figures" / "figure_8.png").resolve()
+
+    def fail_figure_read(path: Path) -> bytes:
+        if path == figure_path:
+            raise PermissionError("Synthetic read failure.")
+
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_figure_read)
+
+    results = resolve_visual_assets(
+        run_dir,
+        ("figure_8", "page_0002"),
+    )
+
+    assert results == (
+        AssetResolution(
+            asset_id="figure_8",
+            status="unavailable",
+            media_type=None,
+            image_bytes=None,
+            reason="Asset could not be read (PermissionError).",
+        ),
+        AssetResolution(
+            asset_id="page_0002",
+            status="available",
+            media_type="image/png",
+            image_bytes=available_assets["page_0002"],
+            reason=None,
+        ),
+    )
+
+
+@pytest.mark.parametrize("path_kind", ["relative", "absolute"])
+def test_resolve_visual_assets_rejects_escaping_path_before_any_image_read(
+    run_dir: Path,
+    tmp_path: Path,
+    figure_entry: dict,
+    available_assets: dict[str, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    path_kind: str,
+) -> None:
+    outside_image = tmp_path / "outside.png"
+    outside_image.write_bytes(b"outside image")
+
+    figure_entry["relative_path"] = (
+        "../outside.png" if path_kind == "relative" else str(outside_image.resolve())
+    )
+    _write_figures(run_dir, [figure_entry])
+
+    def reject_read(path: Path) -> bytes:
+        raise AssertionError(f"Unsafe request attempted an image read: {path}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_read)
+
+    with pytest.raises(ValueError, match="escapes the run directory"):
+        resolve_visual_assets(
+            run_dir,
+            ("page_0002", "figure_8"),
+        )
+
+
+def test_resolve_visual_assets_rejects_image_symlink_outside_run(
+    run_dir: Path,
+    tmp_path: Path,
+    available_assets: dict[str, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outside_image = tmp_path / "outside.png"
+    outside_image.write_bytes(b"outside image")
+
+    figure_path = run_dir / "figures" / "figure_8.png"
+    figure_path.unlink()
+
+    try:
+        figure_path.symlink_to(outside_image)
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating symbolic links is unavailable.")
+
+    def reject_read(path: Path) -> bytes:
+        raise AssertionError(f"Unsafe request attempted an image read: {path}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_read)
+
+    with pytest.raises(ValueError, match="escapes the run directory"):
+        resolve_visual_assets(
+            run_dir,
+            ("page_0002", "figure_8"),
+        )
