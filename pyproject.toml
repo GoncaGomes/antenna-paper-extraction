@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "docling>=2.126.0",
     "openai>=3.6.0,<4",
+    "openai-agents>=0.22.2",
     "pillow",
     "pydantic>=2.13.4",
     "pypdfium2>=5.13.0",
