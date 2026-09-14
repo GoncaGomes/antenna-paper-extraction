@@ -2,7 +2,7 @@
 
 - **Status:** active execution plan
 - **Version:** 3.1-draft
-- **Date:** 2026-09-10
+- **Date:** 2026-09-14
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
 - **Current implementation phase:** Phase 3 - Bounded asset inspection
 
@@ -100,12 +100,11 @@ The repository owner controls the normal branch sequence for each phase:
 7. Delete the short-lived branch after the merge.
 8. Create the next branch from the updated `main`.
 
-Phase 3 deliberately permits an intermediate merge of the completed 03B
-figure-extraction increment before the full phase gate passes. This update
-prepares owner review; the intermediate merge is pending. It closes that
-increment, not Phase 3. The owner controls the continuation branch after the
-merge, starting from the accepted state; continuation must not assume that a
-deleted branch remains available. No agent performs Git mutations.
+Phase 3 was deliberately subdivided. The 03B figure-extraction increment is
+merged into local `main`. The remaining implementation is on
+`feat/bounded-asset-consuption`, pending owner review and merge; this does not
+erase the outstanding acceptance items in section 11.8. The owner controls
+subsequent branches and merges. No agent performs Git mutations.
 
 Tags preserve important milestones. Long-lived feature branches should not be
 used as substitutes for tags or documentation.
@@ -129,7 +128,7 @@ working vertical slices.
 | 0 | `00 - Foundation and project rules` | `chore/foundation` | Clean, governed development baseline |
 | 1 | `01 - Run lifecycle and source preservation` | `feat/run-lifecycle` | Deterministic run and ordered page artefacts |
 | 2 | `02 - NuExtract3 DocumentPackage` | `feat/document-package` | Combined Markdown, ordered page assets, and per-batch diagnostics |
-| 3 | `03 - Bounded asset inspection` | `feat/asset-inspection` | Post-conversion figures, minimal visual catalogue, safe asset resolution, and one-round interaction control |
+| 3 | `03 - Bounded asset inspection` | `feat/asset-inspection` | Post-conversion figures, minimal visual catalog, safe asset resolution, and one-round interaction control |
 | 4 | `04 - Architecture agent` | `feat/architecture-agent` | `architecture_evidence_report.md` |
 | 5 | `05 - Results agent` | `feat/results-agent` | `results_evidence_report.md` |
 | 6 | `06 - Canonicalization and final contracts` | `feat/canonicalization` | Two validated final JSON documents |
@@ -137,12 +136,12 @@ working vertical slices.
 | 8 | `08 - Scientific benchmark and baseline` | `test/scientific-benchmark` | Measured baseline and release tag recommendation |
 
 One phase is one principal discussion boundary, with named continuation chats
-and intermediate increments when explicitly agreed. Phase 3 continues from
-03B figure extraction to `03C - Bounded asset inspection`. The latter covers
-the remaining Phase 3 work, not a new architectural phase. Carry the handoff
-record across the pending intermediate merge; the owner chooses the
-continuation branch. The table describes full phase outcomes, not completed
-work or a requirement to retain the same branch after a merge.
+and intermediate increments when explicitly agreed. Phase 3 continued from
+03B figure extraction to `03C - Bounded asset inspection` on
+`feat/bounded-asset-consuption`. Its implementation is complete on that branch;
+acceptance and merge status are recorded separately. The next stages are
+Architecture and Results. The table describes full phase outcomes, not a
+requirement to retain the same branch after a merge.
 
 ## 5. Rules for every phase chat
 
@@ -215,7 +214,8 @@ These constraints apply to all phases:
 - no scientific decisions in deterministic code;
 - no table or equation crops;
 - complete Markdown is the initial scientific-agent context;
-- raw model output is persisted before strict parsing;
+- Phase 2 raw model output is persisted before strict parsing; scientific-agent
+  response persistence belongs to Phases 4 and 5, not the Phase 3 SDK loop;
 - failures and partial successes remain inspectable;
 - exact source values and units are not silently normalized away;
 - missing information is explicit;
@@ -538,8 +538,8 @@ gate. Rendered full-page images and the existing manifests remain the
 implemented Phase 2 boundary.
 
 Phase 3 replaces that page-only consumer boundary with post-conversion figure
-extraction, a minimal visual catalogue, and safe figure and page resolution.
-This planned extension does not change Phase 2 completion criteria.
+extraction, a minimal visual catalog, and safe figure and page resolution.
+This extension does not change the historical Phase 2 completion criteria.
 
 ### 10.6 Human and remote evidence
 
@@ -577,21 +577,23 @@ Phase 2 package boundary.
 
 ## 11. Phase 3 - bounded asset inspection
 
-- **Chat:** 03B figure extraction; continuation `03C - Bounded asset inspection`
-- **Current branch:** `feat/asset-inspection`; continuation branch controlled by owner
-- **Planned agent calls:** one without inspection, or two plus one tool execution with inspection
+- **Chat:** `03C - Bounded asset inspection`
+- **Current branch:** `feat/bounded-asset-consuption`
+- **Inspection calls:** one without a tool request; two plus one tool execution with a request
 - **Preprocessing cost:** separate, explicit Docling local layout inference
-- **Status:** in progress; 03B implemented, pending owner review and intermediate merge
+- **Implementation:** complete on current branch; 03B already merged into local `main`
+- **Validation:** local automated coverage and owner-reported protocol probes; see 11.8
+- **Owner review and merge:** current branch pending; full acceptance not yet closed
 
 ### 11.1 Objective
 
 Extract figures after document conversion, then implement safe asset resolution
 and bounded inspection using the complete Markdown and a minimal visual
-catalogue. Figures are the preferred intended assets, with page fallback still
-to be integrated. 03B figure extraction is implemented. The minimal catalogue,
-safe figure/page resolver, bounded tool interaction, and real multimodal
-protocol validation remain pending. Architecture Agent, Results Agent,
-canonicalization, final outputs, and the end-to-end runner remain future work.
+catalog. Figure preparation, catalog construction, exact figure/page resolution,
+bounded SDK interaction, and the institutional probe are implemented. Automatic
+page fallback is deferred; declared pages can be requested explicitly. Architecture
+Agent, Results Agent, canonicalization, final outputs, and the end-to-end runner
+remain future work.
 
 ### 11.2 Fixed decisions for this phase
 
@@ -612,7 +614,7 @@ canonicalization, final outputs, and the end-to-end runner remain future work.
   render each required page once per extraction execution and reuse it;
 - keep complete compound figures together, with no table or equation crops;
 - preserve source-page links and metadata needed for safe asset resolution;
-- agents initially receive complete Markdown and the minimal visual catalogue;
+- agents initially receive complete Markdown and the minimal visual catalog;
 - the requesting agent chooses exact figure IDs and/or page IDs in one round;
 - the tool is deterministic and contains no model;
 - returned images are interpreted by the same scientific model;
@@ -624,27 +626,26 @@ manual evidence. Label uniqueness does not check semantic caption equivalence
 or validate crops. Manual visual review and end-to-end latency measurement
 remain required; current extraction timings do not satisfy the latter gate.
 
-### 11.3 Questions to decide in this chat
+### 11.3 Settled boundary and remaining decisions
 
-- exact tool name and concise model-facing description;
-- minimum request information: asset identifiers plus focused visual questions;
-- maximum assets and payload per one round based on the endpoint probe;
-- how the endpoint represents image tool results;
-- how invalid, oversized, or duplicate requests are reported;
-- the minimal catalogue and consumer validation boundary, including how known
-  problematic crops are represented or withheld;
-- provenance-supported page fallback for unresolved or unreliable figures;
-- broader validation of rendering defaults and recovery limits.
+The implemented tool is `get_visual_assets`, with exact `asset_ids` only.
+The minimal catalog, ordered availability results, Chat Completions adapter,
+and one-round budget are settled. `max_assets=6` is a configured default,
+not measured endpoint capacity. The 03B CLI and recovery settings remain as
+recorded below.
 
-`figures/manifest.json`, `extract-figures`, `--scale`, `--margin-pt`, and the
-implemented recovery thresholds are settled for 03B (section 11.4).
+Still open: broader crop validation, treatment of known poor crops, automatic
+page fallback, payload capacity, end-to-end latency, and integrity checks beyond
+the implemented resolver. Response JSON persistence and destinations belong to
+the Architecture and Results stages. No Phase 3 HTTP logging or persistent
+tracing subsystem is required.
 
 ### 11.4 Implemented increment 03B - figure extraction and caption recovery
 
-Implemented on `feat/asset-inspection` at inspected HEAD
-`5e1caae7f6a898b554d6a6fe787c19cbcee43588`. This is an implementation commit,
-not a merge SHA. The bounded 03B scope is closed for documentation handoff and
-owner review, with an intermediate merge pending. Full Phase 3 is not complete.
+Originally implemented on `feat/asset-inspection`, including recovery commit
+`5e1caae7f6a898b554d6a6fe787c19cbcee43588`. The increment is now present in
+local `main` through `ee040c2` (`feat(figures): extract PDF figures with caption
+provenance (#6)`). This intermediate merge did not complete all of Phase 3.
 
 Implemented behaviour:
 
@@ -728,127 +729,121 @@ path; inaccurate Docling regions can still include tables or other content.
 Pause expansion of automatic region repair and subfigure grouping. Continue
 with the consumer boundary, preserving these limitations explicitly.
 
-### 11.5 Pending increment - minimal catalogue and safe figure/page resolution
+### 11.5 Implemented catalog and exact asset resolution
 
-Suggested message:
+`assets.py` provides `build_visual_catalog(run_dir)` and
+`resolve_visual_assets(run_dir, asset_ids, *, max_assets=6)`. The catalog is
+built in memory from `figures/manifest.json` and `pages/pages.json`, without
+loading images. Its figure entries contain only `figure_id`, `status`, and
+nullable `page_id`; its `pages` list contains declared page IDs. Captions remain
+in the complete Markdown and figure manifest.
 
-```text
-feat(tools): resolve manifest-backed visual assets
-```
+Figures are sorted numerically, pages retain source order, entries without
+figure IDs are omitted, and duplicate IDs are rejected. Multiple captions or
+candidates mark an association ambiguous; otherwise status reflects whether a
+crop path is declared. Page links require one candidate with one position on a
+declared page, even when captions are ambiguous. Unknown links remain null.
+Catalog availability certifies neither file readability nor crop quality.
 
-Behaviour:
+The resolver accepts a non-empty tuple of unique declared figure/page IDs.
+It validates the configured count limit and path containment, including
+symlinks, before reading requested images in order. It returns `asset_id`,
+`status`, `media_type`, `image_bytes`, and `reason`. Unresolved/ambiguous figures,
+missing files, directories, and read errors remain explicitly unavailable;
+other requested results are preserved. Pages can be requested despite existing
+figure PNGs. No automatic page substitution occurs.
 
-- depend on accepted figure extraction and the existing page manifest;
-- define and validate the minimal visual catalogue and asset boundary;
-- build on existing page PNGs and `pages/pages.json`; allow page requests even
-  when a figure PNG exists, since a crop can be incomplete or contain unrelated
-  content;
-- attach a fallback page reference only when source provenance supports it;
-  Markdown labels alone do not establish pages, and unknown links stay unresolved;
-- decide how known problematic crops are represented or withheld. Neither PNG
-  existence nor label uniqueness certifies quality; automatic rejection is not
-  implemented and its policy remains undecided;
-- load only package artefacts that satisfy that boundary;
-- accept exact declared identifiers;
-- enforce count and payload limits;
-- preserve requested order or apply one documented stable ordering rule;
-- reject unknown, duplicate, or unsafe references;
-- return image data and source metadata;
-- trace identifiers and hashes without logging large encoded payloads.
+`tests/test_assets.py` covers catalog fields and ordering, provenance links,
+ambiguous and unresolved entries, invalid requests, mixed figure/page requests,
+selective reads, path escape attempts, and unavailable files. It does not prove
+crop quality, hash integrity, or endpoint payload capacity. Hash verification,
+image-content validation, and a byte-payload limit are not implemented.
 
-Tests:
+### 11.6 Implemented bounded SDK inspection
 
-- figure, full-page, and mixed-request resolution with source-page links;
-- unknown and duplicate identifiers;
-- path traversal attempts;
-- payload and count limits;
-- deterministic ordering;
-- altered asset hash;
-- no file access outside the package;
-- page requests despite existing figure PNGs and unresolved page relationships.
+The async importable entry point is `run_visual_inspection(*, run_dir, model,
+instructions, max_assets=6)`, using an `OpenAIChatCompletionsModel`. It supplies
+the complete `document_conversion/document.md` and minimal catalog to the model.
+The caller owns the client and must disable automatic retries. Six assets is a
+configured default, not a measured endpoint limit.
 
-Keep the figure manifest small and add only metadata needed by this consumer.
+The Agents SDK manages the loop. A direct answer uses one model call and zero
+tool executions; an asset request uses two calls and one tool execution, even
+when all assets are unavailable. Figures and pages share the same request.
+Additional tool calls in the same or a later turn are rejected. Model execution
+is sequential, without automatic retries or fallback models in the supported
+configuration. The tool returns availability metadata and images; the same
+requesting model interprets them.
 
-### 11.6 Pending increment - enforce one tool round
+The Chat Completions adapter places image-bearing results in a user multimodal
+message while preserving metadata, order, and the associated tool-call ID in
+the tool response. Image-free results remain tool text. SDK tracing is disabled.
 
-Suggested message:
+`VisualInspectionResult` returns only `final_text`, `requested_asset_ids`,
+`model_calls`, and `tool_executions` in memory. Phase 3 defines no inspection CLI,
+output directory, HTTP log, or persistent trace. The later scientific agents
+will define response destinations and a JSON containing the complete final
+answer and model responses, including tool calls. Complete responses are not
+currently exposed by this result type.
 
-```text
-feat(agents): add a bounded visual tool interaction
-```
+`tests/test_visual_inspection.py` uses the real SDK with scripted HTTP transport
+and synthetic assets. Coverage includes direct answers, figure/page ordering,
+exact image bytes and tool-call IDs, initial context, partially and wholly
+unavailable requests, malformed arguments, resolver rejection, extra tool calls,
+HTTP failures and timeouts before/after tool use without retries, and empty
+final text. Normal tests contact no endpoint.
 
-Behaviour:
+### 11.7 Implemented institutional protocol probe
 
-- invoke the model with complete Markdown, minimal visual catalogue, role
-  prompt, and tool definition;
-- accept either a final report or one valid asset request;
-- execute the deterministic asset tool;
-- invoke the same model again with the returned images;
-- require a final report after the tool result;
-- reject a second tool request;
-- record model-call and tool-execution counts explicitly.
+`scripts/probe_multimodal.py` is an opt-in probe using a synthetic image. It
+reads `SKYNET_BASE_URL`, `SKYNET_API_KEY`, and `ARCHITECTURE_AUTHOR_MODEL`, with
+optional local `.env` loading. Its client disables retries and redirects; the
+script counts HTTP requests and tool executions in memory and prints results.
+It does not introduce a persistence subsystem. No dedicated automated probe
+test file exists; the inspection integration tests cover the related SDK path.
 
-Figure and page requests share the same permitted round. Asset fallback adds
-neither a second inspection round nor a fallback model.
+The owner reported successful runs with `gemma-4-26b-a4b` and `qwen3.8-27b`,
+using `openai-agents` 0.22.2 and `openai` 3.6.0. Both used two HTTP requests and
+one tool execution, correctly described the synthetic image, and retained the
+initial context code. These observations establish the tested protocol only,
+not scientific extraction quality or production model selection. No payload
+capacity or timing measurements were supplied. These runs were not repeated
+during this documentation update.
 
-Tests with a scripted fake model:
+### 11.8 Phase 3 implementation and acceptance checklist
 
-- one-turn final response with no tool;
-- valid tool request followed by final response;
-- invalid tool arguments;
-- unknown assets;
-- attempted second tool round;
-- model failure before and after the tool;
-- exactly one or two model calls as appropriate;
-- exactly zero or one deterministic tool execution;
-- all raw responses and tool traces survive failure.
+Implementation scope is complete on the current branch. Full acceptance remains
+separate from implementation, owner-reported validation, owner review, and merge.
 
-### 11.7 Pending increment - verify the real multimodal protocol
+- Implemented: figure extraction, caption provenance, explicit unresolved entries,
+  minimal catalog, and deterministic figure/page resolution.
+- Covered by local tests: one-call and two-call paths, including all-unavailable
+  results, exact ordering, additional-request rejection, and failure propagation.
+- Owner-reported validation: the two institutional protocol probes in 11.7.
+- Implemented: the tool performs no scientific interpretation or model call;
+  the SDK manages a bounded sequential loop and returns IDs and call counts.
+- Deferred by agreement: response persistence and destinations belong to Phases
+  4 and 5. Persistent asset/model traces and survival of inspection raw responses
+  are removed from the Phase 3 gate. Phase 1/2 persistence is unchanged.
+- Outstanding evidence: broader manual visual review, compound-figure/caption
+  acceptance, and end-to-end latency including Docling and rendering. Section
+  11.4 records limited manual evidence and extraction-only timings.
+- Outstanding discrepancy: earlier resolver requirements included altered-hash
+  checks and byte-payload limits. These are not implemented or measured. The
+  owner must disposition these requirements explicitly; the count limit and
+  path checks do not establish those properties.
+- Owner review and merge of `feat/bounded-asset-consuption` remain pending.
+  Scientific agents, canonicalization, and final consumer outputs are absent.
 
-Suggested message:
+Local suite and lint results must accompany the handoff; they do not substitute
+for the outstanding manual and performance evidence. The existing full-baseline
+requirements remain applicable and are not declared passed by this increment.
 
-```text
-test(models): verify multimodal tool-result handling
-```
-
-Scope:
-
-- add an opt-in, minimal endpoint probe that uses a harmless visual fixture;
-- verify that the candidate model can emit the tool request;
-- verify that the next request can include the returned image;
-- verify that the same conversation context is preserved;
-- record observed protocol, image limits, latency, and call count;
-- keep production selection open until Phase 4.
-
-The owner will run the future probe manually against the institutional
-endpoint. The pending increment must add a reproducible probe and redacted
-observations, not credentials or unreviewed output dumps.
-
-### 11.8 Phase 3 completion gate
-
-Not passed. Completion of 03B and its intended intermediate merge do not satisfy
-the remaining catalogue, resolver, interaction, protocol, and latency gates.
-
-- separate post-conversion extraction produces figure images and one small
-  manifest in `figures/`, with source-page links and safe resolution metadata;
-- association recovery and label matching preserve provenance and explicit
-  missing or ambiguous outcomes, including initially uncaptioned candidates;
-- manual visual review accepts representative crops, complete compound
-  figures, and caption associations; rendering settings and recovery limits
-  are validated or their limitations recorded;
-- end-to-end latency is measured, with Docling local inference and rendering
-  reported separately from endpoint calls and tool execution;
-- figure, page, and mixed requests resolve safely from the minimal catalogue;
-- a fake-model integration proves both one-call and two-call paths;
-- the real endpoint protocol is measured for at least one eligible multimodal
-  candidate;
-- the tool never interprets assets or invokes a model;
-- a second tool round is impossible in the baseline;
-- exact asset and model-call traces are preserved;
-- the implementation is a small explicit controller, not a general agent
-  framework;
-- local tests and lint pass; no scientific agents or final-output work is added;
-- the branch is merged and deleted.
+Local verification on 2026-09-14: `uv run --no-sync pytest` reported 229 passed
+and 3 skipped. The skipped cases require symlink creation unavailable in this
+environment, so those paths were not exercised here. `uv run --no-sync ruff
+check .` and `uv run --no-sync ruff format --check .` passed. No institutional
+probe was run during this verification.
 
 ### 11.9 Learning outcome
 
@@ -876,9 +871,11 @@ complete Markdown and only the visual assets the agent requests.
   missing, and proposed information;
 - which architecture features are critical to reconstruction;
 - what evidence makes final/fabricated design selection acceptable;
-- whether Gemma 4, Qwen 3.6, or another endpoint-proven multimodal candidate
+- whether either model from section 11.7 or another endpoint-proven candidate
   should be benchmarked first;
-- scoring and human-review criteria for model selection.
+- scoring and human-review criteria for model selection;
+- destination and filename of the response JSON containing the complete final
+  answer and model responses, including tool calls.
 
 Do not define a universal block/CAD schema in this phase. The output is
 Markdown.
@@ -918,14 +915,15 @@ feat(architecture): generate an evidence-grounded report
 Behaviour:
 
 - validate the Phase 3 consumer boundary before calling the model;
-- send complete Markdown, the minimal visual catalogue, the focused role, and the
+- send complete Markdown, the minimal visual catalog, the focused role, and the
   asset tool;
 - execute the bounded one-round interaction from Phase 3;
 - require selection evidence or explicit selection ambiguity;
 - preserve materials, components, geometry, dimensions, relationships, feeds,
   derivations, conflicts, and missing information at report level;
-- persist `architecture_evidence_report.md`, raw responses, tool traces, and a
-  validation report;
+- define the response JSON destination and persist the complete final answer
+  and model responses, including tool calls, alongside the evidence report and
+  its validation; extend the Phase 3 result boundary only with this consumer;
 - never request or emit the final architecture JSON.
 
 Tests with fake clients:
@@ -1056,14 +1054,15 @@ Behaviour:
 
 - load only the package accepted through the Phase 3 consumer boundary, not the
   architecture report;
-- send complete Markdown, the minimal visual catalogue, focused role, and asset
+- send complete Markdown, the minimal visual catalog, focused role, and asset
   tool;
 - use the same bounded interaction protocol;
 - inventory all reported result categories, designs, variants, setups, and
   conditions;
 - preserve exact reported values and uncertainty;
-- persist `results_evidence_report.md`, raw responses, tool traces, and a
-  validation report;
+- define this agent's response JSON destination and persist the complete final
+  answer and model responses, including tool calls, alongside the evidence
+  report and its validation;
 - never emit the final results JSON.
 
 Tests with fake clients:
@@ -1347,7 +1346,7 @@ Normal order:
 2. render ordered pages;
 3. make `B` sequential NuExtract3 batch calls and persist complete Markdown;
 4. extract figures from the preserved PDF using Markdown captions, then
-   validate the figure and page catalogue for downstream consumption;
+   validate the figure and page catalog for downstream consumption;
 5. execute the architecture agent;
 6. execute the results agent;
 7. canonicalize when both reports are valid;
@@ -1675,7 +1674,7 @@ The dependency structure is intentionally small:
 Run lifecycle
     -> Document conversion and complete Markdown
         -> Figure extraction from preserved PDF
-            -> Accepted DocumentPackage and minimal figure/page catalogue
+            -> Accepted DocumentPackage and minimal figure/page catalog
                 -> Architecture report and independent Results report
                     -> Canonical combined response (requires both reports)
                         -> Two final JSON files
@@ -1850,13 +1849,13 @@ The first v3 baseline is complete only when all of the following are true.
   once and in source order;
 - conversion traces and raw responses are inspectable;
 - figures and their caption associations pass manual visual review;
-- the minimal figure/page catalogue supports safe asset resolution;
+- the minimal figure/page catalog supports safe asset resolution;
 - end-to-end latency includes measured Docling inference and rendering costs.
 
 ### Scientific agents
 
 - architecture and results operate independently from the same package;
-- each initially receives complete Markdown and the minimal visual catalogue;
+- each initially receives complete Markdown and the minimal visual catalog;
 - each uses zero or one deterministic asset-tool execution;
 - each produces a readable evidence report;
 - every material claim has evidence or an explicit uncertainty state;
@@ -1900,24 +1899,26 @@ Phase 1 is complete and was integrated into `main` with squash merge
 and was merged into `main` with squash merge
 `d88ba548f32254edd97ba10f7c90e4e74393d083`.
 
-03B figure extraction and conservative caption recovery are implemented at
-`5e1caae7f6a898b554d6a6fe787c19cbcee43588` on `feat/asset-inspection`.
-The owner confirmed recovery of article 001's missing Figure 8; merged-region
-and split-subfigure limitations remain, with no confirmed post-recovery result
-for article 004. Section 11.4 records the supplied evidence and its limits.
+03B figure extraction is now in local `main` through `ee040c2`. The catalog,
+resolver, SDK inspection, and institutional probe are implemented on
+`feat/bounded-asset-consuption` at inspected HEAD
+`ae67a3971949594385854e42e43b87d1c9f7ebc3`. That branch is not merged into
+local `main`; owner review and merge remain pending. Section 11 separates
+implemented behaviour, automated coverage, supplied evidence, and acceptance
+discrepancies. No endpoint was contacted for this documentation update.
 
 Next steps:
 
-1. Owner review of 03B and this documentation, followed by the intended
-   intermediate merge. No merge is recorded yet.
-2. Continue in `03C - Bounded asset inspection`, still within Phase 3, on the
-   continuation branch chosen by the owner after the merge.
-3. Implement the minimal catalogue, provenance-supported page fallback, and
-   safe figure/page resolution before scientific-agent work. Pause further
-   automatic region repair and subfigure grouping.
-4. Complete bounded interaction, real multimodal protocol validation, manual
-   visual review, and end-to-end latency measurement against the full gate.
+1. Owner review of the completed Phase 3 implementation and explicit disposition
+   of section 11.8's remaining integrity, manual-review, and performance items.
+2. Owner-controlled merge and handoff to Phase 4, Architecture Agent, then
+   Phase 5, Results Agent, on branches selected by the owner.
+3. Define each scientific agent's prompt, evidence report, response destination,
+   and JSON containing its complete final answer and model responses, including
+   tool calls. Do not add Phase 3 HTTP logging or persistent tracing.
 
-Phase 3 remains in progress. Scientific agents, canonicalization, final
-outputs, and the end-to-end runner remain future work. This documentation
-update does not implement any of those pending capabilities.
+Scientific agents, canonicalization, final consumer JSON generation, and the
+end-to-end runner remain unimplemented. Automatic page fallback is deferred;
+explicit figure/page requests already share one tool execution. Crop limitations
+and unmeasured end-to-end performance remain visible rather than being treated
+as resolved by the protocol probes.
