@@ -242,7 +242,8 @@ async def main() -> int:
         print("Protocol checks passed. Verify the visual description manually.")
         return 0
 
-    except Exception as error:
+    # Report failures without exposing response bodies or credentials.
+    except Exception as error:  # noqa: BLE001
         print(f"Probe failed: {type(error).__name__}")
 
         status_code = getattr(error, "status_code", None)
