@@ -7,14 +7,15 @@ The final consumer-facing outputs will be:
 - `antenna_architecture.json`
 - `antenna_results.json`
 
-The complete extraction pipeline is not implemented. Phases 1 and 2 are merged
-into `main`. The 03B figure-extraction increment is implemented on
-`feat/asset-inspection` and is being prepared for owner review and an
-intermediate merge. Phase 3 remains in progress.
+The complete extraction pipeline is not implemented. Phases 1 and 2 and the
+03B figure-extraction increment are merged into local `main`. The remaining
+Phase 3 implementation is on `feat/bounded-asset-consuption`, pending owner
+review and merge. Validation evidence and outstanding acceptance items are
+recorded separately in the roadmap.
 
 ## Project status
 
-Documentation updated: 2026-09-10.
+Documentation updated: 2026-09-14.
 
 The available workflow creates an isolated run, preserves and verifies the
 source PDF, renders every page in source order, and converts those rendered
@@ -36,6 +37,10 @@ Currently implemented:
 - Conservative same-page geometric recovery of missing caption associations
 - `figures/manifest.json` with provenance, timings, and unresolved entries
 - `figure_extraction` lifecycle support
+- Minimal visual catalog built from the existing figure and page manifests
+- Deterministic resolution of exact figure/page IDs with explicit availability
+- Importable bounded multimodal inspection using the OpenAI Agents SDK
+- Institutional multimodal protocol probe, with owner-reported successful runs
 - Structured phase status and failure records
 - Timezone-aware lifecycle timestamps using `Europe/Lisbon`
 - Atomic JSON and binary persistence
@@ -43,8 +48,7 @@ Currently implemented:
 
 Not yet implemented:
 
-- Minimal visual catalogue, page fallback integration, and safe asset resolver
-- Bounded tool interaction and real multimodal protocol validation
+- Automatic page fallback and scientific-agent response persistence
 - Architecture and results extraction agents
 - Canonicalization and final JSON generation
 - An end-to-end pipeline command
@@ -56,9 +60,8 @@ The architecture defines this sequential flow:
 1. Initialize a traceable run and render the PDF pages in source order.
 2. Convert the ordered page sequence into Markdown with NuExtract3.
 3. Extract figures using converted Markdown captions and the preserved PDF.
-4. Build a minimal visual catalogue and expose safe figure/page inspection
-   through one tool round per agent (planned). Prepared figure and page files
-   already exist; this catalogue, page fallback integration, and tool do not.
+4. Build a minimal visual catalog and inspect exact figure/page IDs through
+   one tool execution when the model requests assets (implemented on the branch).
 5. Produce independent, sequential architecture and results reports (planned).
 6. Canonicalize the grounded claims into a shallow validated contract (planned).
 7. Split the validated response into the two final JSON documents (planned).
@@ -163,6 +166,43 @@ Docling performs local model inference and may download model weights on first
 use. This command does not require institutional model endpoint configuration.
 Docling image generation is disabled; PDFium produces the final PNGs.
 
+Visual inspection is an importable capability in
+`antenna_paper_extraction.visual_inspection`, not a CLI command:
+
+```python
+from antenna_paper_extraction.visual_inspection import run_visual_inspection
+
+await run_visual_inspection(
+    run_dir=run_dir, model=model, instructions=instructions, max_assets=6
+)
+```
+
+`run_visual_inspection` accepts an `OpenAIChatCompletionsModel`; its caller owns
+the client and must disable automatic retries. It reads the complete
+`document_conversion/document.md` and builds the catalog from
+`figures/manifest.json` and `pages/pages.json`. Catalog figures contain only
+`figure_id`, `status`, and nullable `page_id`; `pages` lists declared page IDs.
+The default `max_assets=6` is a configured count limit, not measured endpoint
+capacity. No inspection output directory is generated.
+
+The model decides whether to request assets. A direct answer uses one model
+call and zero tool executions. A figure/page request uses two calls and one
+tool execution, including when all requested assets are unavailable. Further
+tool requests are rejected. The same model interprets the returned images.
+Automatic page fallback is deferred; a declared page may be requested explicitly
+alongside figures, even when a figure crop exists.
+
+The in-memory result contains `final_text`, `requested_asset_ids`,
+`model_calls`, and `tool_executions`. Response persistence and destinations
+belong to the later scientific agents: the intended deliverable is a JSON
+containing the complete final answer and model responses, including tool calls.
+Phase 3 adds no HTTP logging or persistent tracing subsystem.
+
+`scripts/probe_multimodal.py` is the separate opt-in institutional probe. The
+owner reported successful protocol checks for `gemma-4-26b-a4b` and
+`qwen3.8-27b`; these do not establish scientific extraction quality or select
+a production model. See roadmap section 11.7 for the evidence boundary.
+
 ## Run artefacts
 
 After document conversion and figure extraction complete, the run contains:
@@ -254,8 +294,14 @@ every crop has passed visual review.
   does not automatically repair these layouts or reject all problematic crops.
 - The owner confirmed one real recovery case; this is not universal layout
   validation. Detailed evidence and limitations are recorded in the roadmap.
-- Figure and page files are available, but the minimal catalogue, page fallback
-  integration, safe resolver, and bounded inspection tool are still planned.
+- Catalog availability reflects manifest declarations, not file readability or
+  crop quality. Resolution returns explicit reasons for unavailable assets.
+- Automatic page substitution is not implemented. Unknown figure/page
+  relationships remain unresolved.
+- The resolver checks identifiers, count limits, and path containment; it does
+  not validate image contents, verify hashes, or enforce a byte-payload limit.
+- Endpoint payload capacity, inspection latency, and end-to-end performance
+  remain unmeasured. The existing extraction timings are not a full benchmark.
 - Architecture extraction, results extraction, canonicalization, and final
   JSON generation are not implemented.
 

@@ -1,10 +1,10 @@
 # Antenna Extraction v3 - Architectural Decision
 
-**Status:** Phase 3 in progress; 03B implemented, pending owner review and intermediate merge
+**Status:** Phase 3 implementation complete on branch; owner review and remaining acceptance items pending
 
 **Version:** 3.1-draft
 
-**Date:** 2026-09-10
+**Date:** 2026-09-14
 
 **Scope:** extraction of antenna architecture and reported results from one scientific paper
 
@@ -42,8 +42,8 @@ pipeline**:
 1. NuExtract3 converts the complete ordered page sequence into a
    loss-preserving `DocumentPackage` through sequential batches.
 2. A separate figure-extraction step uses the converted Markdown and preserved
-   PDF to prepare figure assets. A minimal visual catalogue and safe inspection
-   boundary follow as separate work.
+   PDF to prepare figure assets. A minimal visual catalog and deterministic
+   resolver expose them to bounded inspection.
 3. An architecture agent reads the complete Markdown and requests only the
    visual assets it needs.
 4. A results agent independently reads the same package and requests only the
@@ -53,12 +53,12 @@ pipeline**:
 6. Deterministic code validates the contract and splits it into two final JSON
    documents.
 
-Phases 1 and 2 are merged. Figure preparation, including conservative caption
-recovery, is implemented in 03B on `feat/asset-inspection`, pending an
-intermediate merge. The minimal catalogue, page fallback integration, safe
-resolver, bounded interaction, and real multimodal protocol validation remain
-unimplemented. Scientific agents, canonicalization, final outputs, and the
-end-to-end runner are future work.
+Phases 1 and 2 and 03B figure preparation are merged into local `main`. The
+catalog, resolver, Agents SDK inspection, and institutional probe are implemented
+on `feat/bounded-asset-consuption`, pending owner review and merge. The owner
+reported successful protocol probes; outstanding acceptance items are listed
+in the roadmap. Scientific agents, canonicalization, final consumer outputs,
+and the end-to-end runner remain unimplemented.
 
 The difficult scientific tasks are separated by purpose. The architecture
 agent does not have to enumerate every reported result, and the results agent
@@ -183,7 +183,9 @@ The first v3 baseline does not include:
 - multi-paper scheduling;
 - parallel execution;
 - a web application;
-- a general-purpose agent framework.
+- a repository-specific general-purpose agent framework.
+
+The OpenAI Agents SDK is used only for the bounded inspection conversation.
 
 These features require a reproducible failure, a measured benefit, and a new
 architectural decision before implementation.
@@ -202,7 +204,7 @@ NuExtract3 document-conversion phase
   - consecutive batches of up to 8 pages
     |
     v
-Separate figure extraction (implemented 03B, merge pending)
+Separate figure extraction (03B, merged into local main)
   - reads document_conversion/document.md and the preserved PDF
   - Docling local layout inference; pypdfium2 region rendering
     |
@@ -213,19 +215,19 @@ DocumentPackage
   - pages/pages.json
   - complete document.md
   - figures/manifest.json and materialized figure PNGs where resolved
-  - ordered page images prepared for future fallback
+  - ordered page images available for explicit requests
   - per-batch raw responses
   - per-batch traces for successful parses
     |
     v
-Minimal visual catalogue, page fallback, and safe resolver (planned)
+Minimal visual catalog, resolver, and SDK inspection (implemented on branch)
     |
     +------------------------------+
     |                              |
     v                              v
 Architecture agent (planned)      Results agent (planned)
   reads complete Markdown           reads complete Markdown
-  and minimal visual catalogue      and minimal visual catalogue
+  and minimal visual catalog        and minimal visual catalog
   may request exact assets           may request exact assets
   writes evidence report             writes evidence report
     |                              |
@@ -263,9 +265,10 @@ It is responsible for:
 - creating a place for phase status, traces, reports, and failures.
 
 It performs no document interpretation and no page selection. Ordered full-page
-renders remain available alongside the later figure PNGs. Their integration as
-fallback assets is planned. Run status supports `figure_extraction`, initially
-`pending`; older status files without this phase load with that default.
+renders remain available alongside the later figure PNGs for explicit model
+requests. Automatic page fallback is deferred. Run status supports
+`figure_extraction`, initially `pending`; older status files without this phase
+load with that default.
 Figure extraction runs separately after successful document conversion.
 
 ## 8. Phase B - NuExtract3 document conversion
@@ -333,8 +336,8 @@ does not insert page ID markers. Page identity remains in `pages/pages.json`.
 the complete `document_conversion/document.md` and the preserved PDF under
 `input/`; it is not part of `render-pages`. Runs have sibling `input/`,
 `pages/`, `document_conversion/`, and `figures/` directories. This replaces the
-obsolete page-only preparation boundary. Preferred figures with page fallback
-remain the intended consumer policy; fallback integration is still pending.
+obsolete page-only preparation boundary. Figures are preferred, and the model
+can explicitly request declared pages. Automatic page fallback remains deferred.
 
 The implementation reads `<figcaption>` content from Markdown and recognizes
 numeric labels starting with `Figure`, `Fig`, or `Fig.`, case-insensitively.
@@ -398,9 +401,9 @@ association or rendering limitations.
 
 A label or figure ID does not guarantee a PNG. Even a unique association with
 a selected caption may have a null `relative_path` if its region cannot be
-rendered. This manifest is an audit artefact, not an implemented minimal visual
-catalogue, safe resolver, or consumer validation schema. Those remain Phase 3
-work built on the existing figure and page artefacts.
+rendered. This manifest remains an audit artefact. The minimal visual catalog
+is built in memory from it and `pages/pages.json`; there is no new unified
+package manifest. The implemented consumer checks are described in section 9.
 
 ### 8.7 Completion condition
 
@@ -416,9 +419,9 @@ configurable `max_tokens`.
 
 ## 9. Phase C - bounded visual-asset inspection
 
-This section describes planned behaviour. The catalogue, page fallback
-integration, safe resolver, bounded controller, and real multimodal protocol
-validation are not implemented in 03B.
+The catalog, resolver, bounded SDK interaction, and institutional probe are
+implemented on the current branch. Scientific-agent roles and response
+persistence remain later work.
 
 ### 9.1 Why a tool is used
 
@@ -426,43 +429,64 @@ Passing every page image to every agent increases context pressure and makes it
 harder to know which visual evidence influenced the answer. Passing no images
 would make geometry and graph interpretation unreliable.
 
-Each future scientific agent receives the complete Markdown and a minimal
-visual catalogue with declared figure and page IDs, captions and source-page
-links where available. Figures are preferred; full pages remain available as
-fallback when the text or figure assets are insufficient.
+`build_visual_catalog(run_dir: Path) -> VisualCatalog` reads
+`figures/manifest.json` and `pages/pages.json` without loading images. Its
+`figures` entries contain only `figure_id`, `status` (`available`, `unresolved`,
+or `ambiguous`), and nullable `page_id`; `pages` contains declared page IDs.
+Figures are sorted numerically and pages preserve manifest order. Entries
+without figure IDs are omitted; duplicate figure IDs are rejected.
 
-The next increment builds on existing page PNGs and `pages/pages.json`, while
-pausing expansion of automatic region repair and subfigure grouping. Full-page
-requests must remain possible even when a figure PNG exists. Attach a fallback
-page reference only when source provenance supports it; a Markdown label alone
-does not establish a page. Unknown page relationships remain unresolved.
-Representation or withholding of known problematic crops is a pending consumer
-decision; automatic rejection is not implemented.
+Multiple captions or candidates make a figure ambiguous. Otherwise a non-null
+crop path marks it available; a null path marks it unresolved. Availability
+does not verify file readability or certify crop quality. A page link requires
+one candidate with one position referring to a declared page. Markdown labels
+alone do not establish a page; unknown relationships remain unresolved.
+
+Inspection receives the complete Markdown and this minimal catalog. Captions
+remain in Markdown and the figure manifest, not the catalog. The model chooses
+exact figures and/or pages, including a page whose figure PNG exists. Automatic
+page fallback is deferred. Expansion of region repair and subfigure grouping
+remains paused; treatment of known poor crops is a later consumer decision.
 
 ### 9.2 Tool responsibility
 
-The asset tool is deterministic. It:
+`resolve_visual_assets(run_dir: Path, asset_ids: tuple[str, ...], *,
+max_assets: int = 6) -> tuple[AssetResolution, ...]` is deterministic. It rejects
+empty, repeated, unknown, over-limit, or malformed requests and paths escaping
+the run, including resolved symlinks. It reads only requested assets, in request
+order. The default six-asset count limit is configured, not measured endpoint
+capacity. Hash checks, image-content validation, and byte-payload limits are
+not implemented; the roadmap preserves these acceptance discrepancies.
 
-- receives exact figure IDs and/or page IDs declared in the run manifests;
-- checks that the request is valid and within configured limits;
-- loads the corresponding figures and/or full pages;
-- returns the images with their source metadata in stable order;
-- records the request, selected assets, and hashes.
+Each resolution contains `asset_id`, `status` (`available` or `unavailable`),
+`media_type`, `image_bytes`, and `reason`. Unavailable entries retain a reason
+for ambiguity, missing crops, missing/non-file paths, or read errors. Other
+available results survive such failures. No page or model is substituted.
+The SDK tool `get_visual_assets` accepts `asset_ids` and returns availability
+metadata plus images for available entries, without scientific interpretation.
 
 The tool does not search semantically, rank figures, infer relevance, interpret
 pixels, or call another model in the baseline.
 
 ### 9.3 Bounded interaction
 
-Each scientific agent may use at most one visual-inspection tool round in the
-initial architecture. During that round it can request one or more exact assets
-and state a focused question for each request.
+The importable async entry point is `run_visual_inspection(*, run_dir: Path,
+model: OpenAIChatCompletionsModel, instructions: str, max_assets: int = 6)`.
+It reads complete `document_conversion/document.md` and the minimal catalog;
+the model decides whether to call `get_visual_assets`. The request contains
+asset IDs, not per-asset question fields.
 
 After the assets are returned, the same scientific model interprets them and
 must finish its report. It cannot open an unbounded observe-act loop.
 
-Figure and page requests must fit in this same round. Page fallback does not
-introduce a second inspection round or a fallback model.
+Figures and pages share one tool execution. Additional requests, including
+multiple calls emitted in the same turn, are rejected. Explicit page requests
+add neither a second inspection round nor a fallback model.
+
+The Agents SDK `Runner` manages the loop with at most two model turns, parallel
+tool calls disabled, and tool concurrency limited to one. The caller owns the
+model client and must disable automatic retries; supported execution is
+sequential with no fallback models. SDK tracing is disabled.
 
 If benchmark evidence later shows that one round is systematically
 insufficient, the limit may be revisited explicitly. It is not silently raised
@@ -473,15 +497,25 @@ by implementation code.
 This design has one **logical agent run** for architecture and one for results.
 However, a tool-based run normally contains two model inference turns:
 
-1. the model reads complete `document.md` and the minimal visual catalogue,
+1. the model reads complete `document.md` and the minimal visual catalog,
    then emits a tool request;
 2. deterministic code executes the tool and returns the images;
 3. the same model is invoked again with the tool result and emits the report.
 
-The tool execution itself is not a model call. If the agent decides that no
-image is required, its logical run finishes with one model call. Although an
-SDK may expose this as one high-level run, the underlying model endpoint is
-usually invoked again after the tool result.
+The tool execution itself is not a model call. A direct answer uses one model
+call and zero tool executions. An asset request uses two model calls and one
+tool execution, even if every requested asset is unavailable. The second call
+produces the final answer with those limitations explicit.
+
+The Chat Completions input adapter places image-bearing tool results in a
+following user multimodal message. It preserves metadata and image order and
+retains the associated tool-call identifier in the tool response. Results
+without images remain tool text. The same requesting model interprets images.
+
+`VisualInspectionResult` returns `final_text`, `requested_asset_ids`,
+`model_calls`, and `tool_executions` in memory. It does not expose complete
+model responses or write files. There is no inspection CLI or generated output
+directory in Phase 3.
 
 Using a separate VLM inside the tool is not the v3 baseline. That alternative
 would add another reasoning boundary and another model call. The selected
@@ -495,7 +529,7 @@ images.
 The agent initially receives only:
 
 - the complete `document.md`;
-- the minimal visual catalogue defined in Phase 3;
+- the minimal visual catalog defined in Phase 3;
 - a focused architecture role and reporting template;
 - access to the bounded asset-inspection tool.
 
@@ -535,6 +569,11 @@ The report should be understandable and reviewable without reading a large
 schema. It should preserve disagreement and uncertainty rather than forcing a
 premature construction.
 
+Phase 4 owns response persistence and its destination. The intended additional
+deliverable is a JSON containing the complete final answer and model responses,
+including tool calls. Its filename and relation to the Markdown evidence report
+are to be defined with that agent, not by Phase 3.
+
 ### 10.4 Evidence
 
 Evidence may refer to:
@@ -556,7 +595,7 @@ The results agent receives the same initial source interface as the
 architecture agent:
 
 - the complete `document.md`;
-- the minimal visual catalogue defined in Phase 3;
+- the minimal visual catalog defined in Phase 3;
 - a focused results role and reporting template;
 - access to the bounded asset-inspection tool.
 
@@ -587,6 +626,10 @@ Like the architecture report, it uses stable sections and claim identifiers
 without being forced into the final strict JSON. Every reported result must be
 associated with evidence and with its design or setup when the paper supports
 that association.
+
+Phase 5 likewise owns its response destination and the JSON containing the
+complete final answer and model responses, including tool calls. This remains
+unimplemented and separate from final consumer JSON generation.
 
 ## 12. Phase F - canonicalization call
 
@@ -665,9 +708,13 @@ asset linkage, not on its ability to author the final antenna schema.
 
 ### 13.2 Architecture and results agents
 
-Gemma 4 and Qwen 3.6 are the initial candidates discussed for the two
-scientific roles. A candidate is eligible for the asset-tool design only if the
-deployed endpoint can return tool calls and later accept image tool results.
+The owner reported successful institutional protocol probes for
+`gemma-4-26b-a4b` and `qwen3.8-27b` using `openai-agents` 0.22.2 and `openai`
+3.6.0. Each used two HTTP requests and one tool execution, described the
+synthetic image correctly, and retained the initial context code. This
+establishes only the tested protocol, not scientific quality, payload capacity,
+timings, or production model selection. The observations were not reproduced
+during this documentation update.
 
 The selection must use frozen inputs and scientific assertions. Model name,
 size, or general reputation is insufficient. The same model may win both roles,
@@ -712,16 +759,17 @@ B = ceil(page_count / 8)
 | Logical phase | Normal model calls | Deterministic tool executions |
 | --- | ---: | ---: |
 | NuExtract3 document conversion | B | 0 |
-| Architecture agent run | 1 if no image; 2 if assets are requested | 0 or 1 |
-| Results agent run | 1 if no image; 2 if assets are requested | 0 or 1 |
+| Architecture agent run | 1 if no asset request; 2 otherwise | 0 or 1 |
+| Results agent run | 1 if no asset request; 2 otherwise | 0 or 1 |
 | Canonicalization | 1 | 0 |
 | **Normal total** | **B + 3 to B + 5** | **0 to 2** |
 
 This is four logical model-driven phases, not a promise of exactly four HTTP
 requests. The later full-pipeline estimates are `B + 3` when neither
-scientific agent uses visual assets, `B + 4` when one agent uses visual assets,
-and `B + 5` when both use visual assets. Every run records the observed number
-of model calls and tool executions.
+scientific agent requests assets, `B + 4` when one agent requests assets,
+and `B + 5` when both request visual assets, including all-unavailable requests.
+Inspection returns model-call and tool-execution counts in memory. Persistence
+of scientific-agent responses and counts belongs to the later agent stages.
 
 No reviewer, repair, retry, fallback, or hidden visual-model call is included
 in this budget.
@@ -746,6 +794,13 @@ latency. The raw response is a separate artefact and is persisted first. Phase
 Later model-driven phases should preserve enough information to reproduce and
 inspect their own boundaries. The exact trace fields should be added with each
 concrete consumer rather than claimed in advance.
+
+Phase 3 adds no HTTP logging or persistent tracing subsystem. The Agents SDK
+holds model responses during execution; the public inspection result exposes
+only the final text, requested IDs, and counts. Architecture and Results stages
+will define response persistence and destinations, with a JSON containing the
+complete final answer and model responses, including tool calls. Phase 1 and
+Phase 2 persistence remain unchanged.
 
 Phase 2 refuses to overwrite existing conversion outputs. A later acceptance
 boundary may define a package identity or immutability rule when a concrete
@@ -775,6 +830,11 @@ command.
 Document conversion stops at the first failed batch. It preserves raw responses
 already received and traces for successfully parsed batches, but does not write
 the final `document.md`.
+
+Inspection propagates invalid-request and model failures without retry in the
+supported client configuration. Unavailable assets are data with explicit
+reasons, not request failures, and still require the final model turn. Phase 3
+does not persist these conversations or add an inspection lifecycle phase.
 
 The following downstream continuation rules remain planned:
 
@@ -812,18 +872,20 @@ Each phase below is intended to have its own ChatGPT Project chat and its own
 short-lived Git branch. The phase chat may contain several small commits, but
 only one commit is implemented and reviewed at a time.
 
-Phase 3 is deliberately subdivided: the completed 03B figure-extraction scope
-is prepared for owner review and an intermediate merge. That merge is pending
-and will not complete Phase 3. Continuation is `03C - Bounded asset inspection`;
-after the merge, the owner selects its branch from the accepted state. Do not
-prescribe continuing on a deleted branch. All Git mutations remain owner work.
+Phase 3 was deliberately subdivided. The 03B figure-extraction increment is
+merged into local `main`; the catalog, resolver, SDK inspection, and probe are
+implemented on `feat/bounded-asset-consuption`. Owner review and merge of that
+branch remain pending, independently of the reported protocol validation.
+Remaining acceptance discrepancies are recorded in roadmap section 11.8.
+The next implementation stages are Architecture and Results, including their
+response persistence. All branch and merge operations remain owner work.
 
 | Phase | Suggested chat | Architectural outcome |
 | --- | --- | --- |
 | 0 | `00 - Foundation and project rules` | Clean repository, authority rules, and executable development baseline |
 | 1 | `01 - Run lifecycle and source preservation` | Deterministic run, PDF identity, ordered page renders, and failures |
 | 2 | `02 - NuExtract3 DocumentPackage` | Ordered page renders, combined Markdown, per-batch diagnostics, and lifecycle state |
-| 3 | `03 - Bounded asset inspection` | Post-conversion figure extraction, minimal visual catalogue, safe asset resolution, and one-round agent control |
+| 3 | `03 - Bounded asset inspection` | Post-conversion figure extraction, minimal visual catalog, safe asset resolution, and one-round agent control |
 | 4 | `04 - Architecture agent` | Evidence-grounded architecture Markdown report |
 | 5 | `05 - Results agent` | Evidence-grounded results Markdown report |
 | 6 | `06 - Canonicalization and final contracts` | Shallow combined response, claim accounting, and two JSON outputs |
@@ -852,14 +914,17 @@ without new empirical evidence:
   specified in section 8.5; prefer figures and retain full-page fallback;
 - maintain page identity in `pages/pages.json`, not model-generated Markdown
   markers;
-- persist each received raw response before parsing and write a trace only
-  after a successful parse;
+- for document conversion, persist each received raw response before parsing
+  and write a trace only after a successful parse;
 - write final Markdown only after all batches succeed;
-- initially pass complete `document.md` and the minimal visual catalogue to each
+- initially pass complete `document.md` and the minimal visual catalog to each
   scientific agent;
 - let each agent request exact visual assets through a deterministic tool;
 - allow at most one asset-tool round per scientific agent in the baseline;
 - use the same scientific model to interpret returned images;
+- use the Agents SDK for the bounded conversation, with no repository workflow engine;
+- preserve unavailable-asset reasons without automatic page or model substitution;
+- defer scientific-agent response persistence and destinations to Phases 4 and 5;
 - keep architecture and results interpretation independent;
 - use Markdown evidence reports as intermediate outputs;
 - canonicalize only after both reports exist;
@@ -875,16 +940,17 @@ evidence:
 
 - broader validation of the implemented recovery thresholds and rendering defaults;
 - representation or withholding of known problematic crops at the consumer boundary;
-- the consumer-specific validation boundary for package artefacts;
-- the minimal package view needed for safe asset routing;
-- the endpoint's tool-call and image-result protocol;
-- visual asset count and payload limits;
+- broader package integrity validation beyond the implemented consumer checks;
+- automatic page fallback, if later justified;
+- measured endpoint capacity and any byte-payload limit beyond the configured count;
+- endpoint compatibility beyond the two reported protocol probes;
 - the exact Markdown report templates and claim-reference notation;
-- whether Gemma 4, Qwen 3.6, or another proven multimodal candidate fills each
+- whether either protocol-tested model or another proven candidate fills each
   scientific role;
 - which model canonicalizes most faithfully;
 - the minimal shallow final JSON contract;
 - the CLI surface for future inspection and pipeline commands;
+- scientific-agent response JSON filenames and destinations;
 - whether explicit single-phase rerun support is needed after baseline use.
 
 Deferred does not mean “build an abstraction now.” The smallest implementation
@@ -898,7 +964,7 @@ An implementation conforms to v3 only if all of the following remain true:
    source order.
 2. Tables and equations are not routed through a second crop/OCR path.
 3. Architecture and results agents initially see the complete Markdown and
-   the minimal visual catalogue required by their accepted consumer boundary.
+   the minimal visual catalog required by their accepted consumer boundary.
 4. Visual asset selection is performed by the requesting agent using exact
    figure IDs and/or page IDs in one round.
 5. The asset tool is deterministic and does not hide another model call.
