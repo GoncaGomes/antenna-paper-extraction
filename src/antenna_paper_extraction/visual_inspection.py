@@ -1,14 +1,15 @@
 import base64
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from agents import (
     Agent,
     ModelSettings,
     OpenAIChatCompletionsModel,
     RunConfig,
-    RunContextWrapper,
     Runner,
     ToolExecutionConfig,
     ToolOutputImage,
@@ -16,9 +17,71 @@ from agents import (
     TResponseInputItem,
     function_tool,
 )
+from agents.exceptions import ModelBehaviorError
 from agents.run import CallModelData, ModelInputData
+from agents.tool_context import ToolContext
+from openai.types.chat import ChatCompletion
 
 from antenna_paper_extraction.assets import build_visual_catalog, resolve_visual_assets
+
+InspectionEventHandler = Callable[[dict[str, Any]], None]
+
+
+class InspectionChatCompletionsModel(OpenAIChatCompletionsModel):
+    """Expose responses before SDK normalization and reject truncation."""
+
+    def __init__(
+        self,
+        *args: Any,
+        on_event: InspectionEventHandler | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.on_event = on_event
+
+    def record_event(self, event: dict[str, Any]) -> None:
+        """Notify the caller synchronously; recording failures must propagate."""
+        if self.on_event is not None:
+            self.on_event(event)
+
+    async def _fetch_response(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        self.record_event({"type": "model_request"})
+
+        try:
+            response = await super()._fetch_response(*args, **kwargs)
+        except Exception as error:
+            self.record_event(
+                {
+                    "type": "model_error",
+                    "error": {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                }
+            )
+            raise
+
+        if isinstance(response, ChatCompletion):
+            self.record_event(
+                {
+                    "type": "model_response",
+                    "response": response.model_dump(
+                        mode="json",
+                        exclude_unset=True,
+                    ),
+                }
+            )
+
+            if response.choices and response.choices[0].finish_reason == "length":
+                raise ModelBehaviorError(
+                    "Visual inspection response terminated with finish_reason='length'."
+                )
+
+        return response
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +96,14 @@ class VisualInspectionResult:
 class _VisualInspectionContext:
     run_dir: Path
     max_assets: int
+    record_event: InspectionEventHandler
     requested_asset_ids: tuple[str, ...] = ()
     tool_executions: int = 0
 
 
 @function_tool(failure_error_function=None)
 async def get_visual_assets(
-    ctx: RunContextWrapper[_VisualInspectionContext],
+    ctx: ToolContext[_VisualInspectionContext],
     asset_ids: list[str],
 ) -> list[ToolOutputText | ToolOutputImage]:
     """Retrieve exact figure or page identifiers from the visual catalog.
@@ -50,52 +114,89 @@ async def get_visual_assets(
     This tool may be called only once per inspection.
 
     Args:
-        asset_ids: Exact identifiers declared on the visual catalog."""
-
+        asset_ids: Exact identifiers declared on the visual catalog.
+    """
     context = ctx.context
 
-    if context.tool_executions >= 1:
-        raise RuntimeError("A second asset request is not allowed.")
-
-    context.requested_asset_ids = tuple(asset_ids)
-    context.tool_executions += 1
-
-    resolutions = resolve_visual_assets(
-        context.run_dir,
-        context.requested_asset_ids,
-        max_assets=context.max_assets,
+    context.record_event(
+        {
+            "type": "tool_request",
+            "call_id": ctx.tool_call_id,
+            "name": ctx.tool_name,
+            "asset_ids": list(asset_ids),
+        }
     )
 
-    outputs: list[ToolOutputText | ToolOutputImage] = []
+    try:
+        if context.tool_executions >= 1:
+            raise RuntimeError("A second asset request is not allowed.")
 
-    for asset in resolutions:
-        metadata = {
-            "asset_id": asset.asset_id,
-            "status": asset.status,
-        }
+        context.requested_asset_ids = tuple(asset_ids)
+        context.tool_executions += 1
 
-        if asset.status == "unavailable":
-            metadata["reason"] = asset.reason
-
-        outputs.append(
-            ToolOutputText(
-                text=json.dumps(metadata, ensure_ascii=False),
-            )
+        resolutions = resolve_visual_assets(
+            context.run_dir,
+            context.requested_asset_ids,
+            max_assets=context.max_assets,
         )
 
-        if asset.status == "available":
-            if asset.image_bytes is None or asset.media_type is None:
-                raise RuntimeError(
-                    "The resolver returned an available asset without image data."
-                )
+        outputs: list[ToolOutputText | ToolOutputImage] = []
 
-            encoded_image = base64.b64encode(asset.image_bytes).decode("ascii")
+        for asset in resolutions:
+            metadata = {
+                "asset_id": asset.asset_id,
+                "status": asset.status,
+            }
+
+            if asset.status == "unavailable":
+                metadata["reason"] = asset.reason
 
             outputs.append(
-                ToolOutputImage(
-                    image_url=f"data:{asset.media_type};base64,{encoded_image}",
+                ToolOutputText(
+                    text=json.dumps(metadata, ensure_ascii=False),
                 )
             )
+
+            if asset.status == "available":
+                if asset.image_bytes is None or asset.media_type is None:
+                    raise RuntimeError(
+                        "The resolver returned an available asset without image data."
+                    )
+
+                encoded_image = base64.b64encode(asset.image_bytes).decode("ascii")
+
+                outputs.append(
+                    ToolOutputImage(
+                        image_url=f"data:{asset.media_type};base64,{encoded_image}",
+                    )
+                )
+
+    except Exception as error:
+        context.record_event(
+            {
+                "type": "tool_result",
+                "call_id": ctx.tool_call_id,
+                "status": "failed",
+                "error": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            }
+        )
+        raise
+
+    context.record_event(
+        {
+            "type": "tool_result",
+            "call_id": ctx.tool_call_id,
+            "status": "succeeded",
+            "assets": [
+                json.loads(output.text)
+                for output in outputs
+                if isinstance(output, ToolOutputText)
+            ],
+        }
+    )
 
     return outputs
 
@@ -148,14 +249,18 @@ def _prepare_visual_input(
 async def run_visual_inspection(
     *,
     run_dir: Path,
-    model: OpenAIChatCompletionsModel,
+    model: InspectionChatCompletionsModel,
     instructions: str,
     max_assets: int = 6,
 ) -> VisualInspectionResult:
     """Run a document inspection with at most one visual asset request.
 
+    The model must reject truncated responses before SDK normalization.
     The caller owns the model client and must disable automatic retries.
     """
+    if not isinstance(model, InspectionChatCompletionsModel):
+        raise TypeError("Visual inspection requires InspectionChatCompletionsModel.")
+
     if not isinstance(max_assets, int) or isinstance(max_assets, bool):
         raise TypeError("Maximum asset count must be an integer.")
 
@@ -181,6 +286,7 @@ async def run_visual_inspection(
     context = _VisualInspectionContext(
         run_dir=run_dir,
         max_assets=max_assets,
+        record_event=model.record_event,
     )
 
     agent = Agent[_VisualInspectionContext](

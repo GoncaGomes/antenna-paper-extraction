@@ -32,7 +32,8 @@ DOCUMENT_CONVERSION_INSTRUCTION = (
     "Convert the following page images into one Markdown document "
     "in the provided order. Preserve the complete readable content, "
     "including headings, prose, tables, equations, figure and table "
-    "captions, labels, symbols, units, footnotes, and references. "
+    "captions, labels, symbols, units, footnotes, and references. Don't lose the"
+    "top page text"
     "Do not summarize, omit, interpret, or reorder the content."
 )
 DOCUMENT_CONVERSION_BATCH_SIZE = 8
