@@ -7,15 +7,14 @@ The final consumer-facing outputs will be:
 - `antenna_architecture.json`
 - `antenna_results.json`
 
-The complete extraction pipeline is not implemented. Phases 1 and 2 and the
-03B figure-extraction increment are merged into local `main`. The remaining
-Phase 3 implementation is on `feat/bounded-asset-consuption`, pending owner
-review and merge. Validation evidence and outstanding acceptance items are
-recorded separately in the roadmap.
+Phases 1, 2, and the accepted Phase 3 scope are complete and merged into `main`.
+The complete extraction pipeline is not implemented. The next development phase
+is Phase 4, Architecture Agent. Recorded validation, accepted limitations, and
+future evaluation are distinguished in the roadmap.
 
 ## Project status
 
-Documentation updated: 2026-09-14.
+Documentation updated: 2026-09-16.
 
 The available workflow creates an isolated run, preserves and verifies the
 source PDF, renders every page in source order, and converts those rendered
@@ -61,7 +60,7 @@ The architecture defines this sequential flow:
 2. Convert the ordered page sequence into Markdown with NuExtract3.
 3. Extract figures using converted Markdown captions and the preserved PDF.
 4. Build a minimal visual catalog and inspect exact figure/page IDs through
-   one tool execution when the model requests assets (implemented on the branch).
+   one tool execution when the model requests assets (implemented and merged).
 5. Produce independent, sequential architecture and results reports (planned).
 6. Canonicalize the grounded claims into a shallow validated contract (planned).
 7. Split the validated response into the two final JSON documents (planned).
@@ -284,6 +283,9 @@ every crop has passed visual review.
 
 ## Current limitations
 
+These accepted limitations and future evaluation items do not block closure of
+Phase 3. They do not imply universal visual, scientific, or performance validation.
+
 - `document.md` has no reliable page markers. Page identity remains in
   `pages/pages.json`.
 - Batch boundaries are mechanical and may need manual review.
@@ -299,7 +301,9 @@ every crop has passed visual review.
 - Automatic page substitution is not implemented. Unknown figure/page
   relationships remain unresolved.
 - The resolver checks identifiers, count limits, and path containment; it does
-  not validate image contents, verify hashes, or enforce a byte-payload limit.
+  not validate image contents. Additional visual-asset hash verification and
+  byte-payload limits are deliberately excluded from the accepted resolver
+  scope, not pending requirements. Existing source/page hashes are unchanged.
 - Endpoint payload capacity, inspection latency, and end-to-end performance
   remain unmeasured. The existing extraction timings are not a full benchmark.
 - Architecture extraction, results extraction, canonicalization, and final

@@ -2,9 +2,9 @@
 
 - **Status:** active execution plan
 - **Version:** 3.1-draft
-- **Date:** 2026-09-14
+- **Date:** 2026-09-16
 - **Architectural authority:** `00_ARCHITECTURE_V3.md`
-- **Current implementation phase:** Phase 3 - Bounded asset inspection
+- **Next development phase:** Phase 4 - Architecture Agent
 
 ## 1. Purpose
 
@@ -100,11 +100,10 @@ The repository owner controls the normal branch sequence for each phase:
 7. Delete the short-lived branch after the merge.
 8. Create the next branch from the updated `main`.
 
-Phase 3 was deliberately subdivided. The 03B figure-extraction increment is
-merged into local `main`. The remaining implementation is on
-`feat/bounded-asset-consuption`, pending owner review and merge; this does not
-erase the outstanding acceptance items in section 11.8. The owner controls
-subsequent branches and merges. No agent performs Git mutations.
+Phase 3 was deliberately subdivided and its accepted scope is now complete.
+Both 03B figure extraction and the bounded-inspection work are merged into
+`main`. Section 11.8 records accepted limitations separately from completion.
+The owner controls subsequent branches and merges. No agent performs Git mutations.
 
 Tags preserve important milestones. Long-lived feature branches should not be
 used as substitutes for tags or documentation.
@@ -138,10 +137,9 @@ working vertical slices.
 One phase is one principal discussion boundary, with named continuation chats
 and intermediate increments when explicitly agreed. Phase 3 continued from
 03B figure extraction to `03C - Bounded asset inspection` on
-`feat/bounded-asset-consuption`. Its implementation is complete on that branch;
-acceptance and merge status are recorded separately. The next stages are
-Architecture and Results. The table describes full phase outcomes, not a
-requirement to retain the same branch after a merge.
+`feat/bounded-asset-consuption`, now merged into `main`. Phase 3 is complete;
+Phase 4, Architecture Agent, is next, followed by Results. The table describes
+full phase outcomes, not a requirement to retain the same branch after a merge.
 
 ## 5. Rules for every phase chat
 
@@ -578,12 +576,12 @@ Phase 2 package boundary.
 ## 11. Phase 3 - bounded asset inspection
 
 - **Chat:** `03C - Bounded asset inspection`
-- **Current branch:** `feat/bounded-asset-consuption`
+- **Implementation branch:** `feat/bounded-asset-consuption`, merged into `main`
 - **Inspection calls:** one without a tool request; two plus one tool execution with a request
 - **Preprocessing cost:** separate, explicit Docling local layout inference
-- **Implementation:** complete on current branch; 03B already merged into local `main`
+- **Status:** complete; accepted scope merged into `main`
 - **Validation:** local automated coverage and owner-reported protocol probes; see 11.8
-- **Owner review and merge:** current branch pending; full acceptance not yet closed
+- **Closure:** owner-confirmed; local history records merge `6a58c96`
 
 ### 11.1 Objective
 
@@ -623,8 +621,9 @@ remain future work.
 
 Scale 3.0 and a 2-point margin are implemented baseline defaults with limited
 manual evidence. Label uniqueness does not check semantic caption equivalence
-or validate crops. Manual visual review and end-to-end latency measurement
-remain required; current extraction timings do not satisfy the latter gate.
+or validate crops. Broader manual review and end-to-end latency measurement
+remain future evaluation; current extraction timings do not establish these
+properties. These limitations do not block closure of the accepted Phase 3 scope.
 
 ### 11.3 Settled boundary and remaining decisions
 
@@ -634,11 +633,14 @@ and one-round budget are settled. `max_assets=6` is a configured default,
 not measured endpoint capacity. The 03B CLI and recovery settings remain as
 recorded below.
 
-Still open: broader crop validation, treatment of known poor crops, automatic
-page fallback, payload capacity, end-to-end latency, and integrity checks beyond
-the implemented resolver. Response JSON persistence and destinations belong to
-the Architecture and Results stages. No Phase 3 HTTP logging or persistent
-tracing subsystem is required.
+Additional visual-asset hash verification and byte-payload limits are deliberately
+excluded from the accepted resolver scope, not pending requirements. Existing
+source/page hashes and Phase 1/2 behaviour are preserved.
+
+Broader crop validation, treatment of known poor crops, endpoint capacity, and
+end-to-end latency remain future evaluation. Automatic page fallback is deferred.
+Response JSON persistence and destinations belong to the Architecture and Results
+stages. No Phase 3 HTTP logging or persistent tracing subsystem is required.
 
 ### 11.4 Implemented increment 03B - figure extraction and caption recovery
 
@@ -756,8 +758,9 @@ figure PNGs. No automatic page substitution occurs.
 `tests/test_assets.py` covers catalog fields and ordering, provenance links,
 ambiguous and unresolved entries, invalid requests, mixed figure/page requests,
 selective reads, path escape attempts, and unavailable files. It does not prove
-crop quality, hash integrity, or endpoint payload capacity. Hash verification,
-image-content validation, and a byte-payload limit are not implemented.
+crop quality, hash integrity, or endpoint payload capacity. Additional asset
+hash verification and byte-payload limits are deliberately excluded from the
+accepted scope. Image-content validation is not implemented.
 
 ### 11.6 Implemented bounded SDK inspection
 
@@ -812,32 +815,34 @@ during this documentation update.
 
 ### 11.8 Phase 3 implementation and acceptance checklist
 
-Implementation scope is complete on the current branch. Full acceptance remains
-separate from implementation, owner-reported validation, owner review, and merge.
+**Completed scope:** Phase 3 is accepted, complete, and merged into `main`.
+Local history records `6a58c96` for the bounded-inspection merge. It includes
+figure extraction and provenance, the minimal catalog, deterministic exact-ID
+resolution, bounded SDK inspection, and the institutional probe. Count limits,
+identifier validation, path containment, and explicit unavailability remain
+the accepted resolver checks. The tool performs no scientific interpretation
+or model call; the sequential SDK loop returns IDs and call counts.
 
-- Implemented: figure extraction, caption provenance, explicit unresolved entries,
-  minimal catalog, and deterministic figure/page resolution.
-- Covered by local tests: one-call and two-call paths, including all-unavailable
-  results, exact ordering, additional-request rejection, and failure propagation.
-- Owner-reported validation: the two institutional protocol probes in 11.7.
-- Implemented: the tool performs no scientific interpretation or model call;
-  the SDK manages a bounded sequential loop and returns IDs and call counts.
-- Deferred by agreement: response persistence and destinations belong to Phases
-  4 and 5. Persistent asset/model traces and survival of inspection raw responses
-  are removed from the Phase 3 gate. Phase 1/2 persistence is unchanged.
-- Outstanding evidence: broader manual visual review, compound-figure/caption
-  acceptance, and end-to-end latency including Docling and rendering. Section
-  11.4 records limited manual evidence and extraction-only timings.
-- Outstanding discrepancy: earlier resolver requirements included altered-hash
-  checks and byte-payload limits. These are not implemented or measured. The
-  owner must disposition these requirements explicitly; the count limit and
-  path checks do not establish those properties.
-- Owner review and merge of `feat/bounded-asset-consuption` remain pending.
-  Scientific agents, canonicalization, and final consumer outputs are absent.
+**Recorded validation:** local tests cover one-call and two-call paths,
+including all-unavailable results, ordering, additional-request rejection,
+and failures. Section 11.7 records the two owner-reported institutional probes.
+Historical test results are retained below; closure adds no new validation claim.
 
-Local suite and lint results must accompany the handoff; they do not substitute
-for the outstanding manual and performance evidence. The existing full-baseline
-requirements remain applicable and are not declared passed by this increment.
+**Accepted limitations:** crop problems and limited manual evidence remain as
+recorded in section 11.4. Endpoint capacity and end-to-end latency are unmeasured.
+These do not block closure of this increment. Additional visual-asset hash
+verification and byte-payload limits are deliberately excluded, not unresolved
+discrepancies or mandatory future work. Existing source/page hashes and Phase
+1/2 behaviour are unchanged; count and path checks do not verify hashes or
+endpoint payload capacity.
+
+**Future evaluation and deferred scope:** broader crop review, scientific
+quality, and performance remain subjects for later evaluation and the scientific
+benchmark. This closure does not claim universal validation or completion of
+the full-baseline requirements. Response JSON persistence and destinations
+belong to Phases 4 and 5; automatic page fallback remains deferred. No Phase 3
+HTTP logging or persistent tracing subsystem is required. Scientific agents,
+canonicalization, and final consumer JSON generation remain unimplemented.
 
 Local verification on 2026-09-14: `uv run --no-sync pytest` reported 229 passed
 and 3 skipped. The skipped cases require symlink creation unavailable in this
@@ -1899,23 +1904,18 @@ Phase 1 is complete and was integrated into `main` with squash merge
 and was merged into `main` with squash merge
 `d88ba548f32254edd97ba10f7c90e4e74393d083`.
 
-03B figure extraction is now in local `main` through `ee040c2`. The catalog,
-resolver, SDK inspection, and institutional probe are implemented on
-`feat/bounded-asset-consuption` at inspected HEAD
-`ae67a3971949594385854e42e43b87d1c9f7ebc3`. That branch is not merged into
-local `main`; owner review and merge remain pending. Section 11 separates
-implemented behaviour, automated coverage, supplied evidence, and acceptance
-discrepancies. No endpoint was contacted for this documentation update.
+Phase 3 is complete and merged into `main`: 03B figure extraction through
+`ee040c2`, and the catalog, resolver, SDK inspection, and institutional probe
+through `6a58c96`. Section 11.8 records the accepted scope, historical validation,
+limitations, and future evaluation. No endpoint was contacted for this update.
 
 Next steps:
 
-1. Owner review of the completed Phase 3 implementation and explicit disposition
-   of section 11.8's remaining integrity, manual-review, and performance items.
-2. Owner-controlled merge and handoff to Phase 4, Architecture Agent, then
-   Phase 5, Results Agent, on branches selected by the owner.
-3. Define each scientific agent's prompt, evidence report, response destination,
-   and JSON containing its complete final answer and model responses, including
-   tool calls. Do not add Phase 3 HTTP logging or persistent tracing.
+1. Begin Phase 4, Architecture Agent, on a branch selected by the owner.
+2. Define its prompt, evidence report, response destination, and JSON containing
+   the complete final answer and model responses, including tool calls.
+3. Continue to Phase 5, Results Agent, after the applicable Phase 4 gate.
+   Do not add Phase 3 HTTP logging or persistent tracing.
 
 Scientific agents, canonicalization, final consumer JSON generation, and the
 end-to-end runner remain unimplemented. Automatic page fallback is deferred;

@@ -1,10 +1,10 @@
 # Antenna Extraction v3 - Architectural Decision
 
-**Status:** Phase 3 implementation complete on branch; owner review and remaining acceptance items pending
+**Status:** Phase 3 complete and merged; Phase 4 is next
 
 **Version:** 3.1-draft
 
-**Date:** 2026-09-14
+**Date:** 2026-09-16
 
 **Scope:** extraction of antenna architecture and reported results from one scientific paper
 
@@ -53,12 +53,12 @@ pipeline**:
 6. Deterministic code validates the contract and splits it into two final JSON
    documents.
 
-Phases 1 and 2 and 03B figure preparation are merged into local `main`. The
-catalog, resolver, Agents SDK inspection, and institutional probe are implemented
-on `feat/bounded-asset-consuption`, pending owner review and merge. The owner
-reported successful protocol probes; outstanding acceptance items are listed
-in the roadmap. Scientific agents, canonicalization, final consumer outputs,
-and the end-to-end runner remain unimplemented.
+Phases 1, 2, and the accepted Phase 3 scope are complete and merged into `main`.
+Phase 3 includes figure preparation, the catalog, resolver, Agents SDK inspection,
+and institutional probe. Recorded validation and accepted limitations are listed
+in the roadmap. Phase 4, Architecture Agent, is next. Scientific agents,
+canonicalization, final consumer outputs, and the end-to-end runner remain
+unimplemented.
 
 The difficult scientific tasks are separated by purpose. The architecture
 agent does not have to enumerate every reported result, and the results agent
@@ -220,7 +220,7 @@ DocumentPackage
   - per-batch traces for successful parses
     |
     v
-Minimal visual catalog, resolver, and SDK inspection (implemented on branch)
+Minimal visual catalog, resolver, and SDK inspection (implemented and merged)
     |
     +------------------------------+
     |                              |
@@ -374,10 +374,11 @@ The intended policy keeps complete compound figures together and has no
 dedicated table or equation crop path. Inaccurate Docling regions can include
 neighbouring text, tables, or other figures, or split subfigures into separate
 uncaptioned candidates. Current crops do not all satisfy the intended boundary.
-PNG existence and label uniqueness do not certify quality. Manual review and
-end-to-end latency measurement remain required. The roadmap records supplied
-manual evidence, including one owner-confirmed recovery, without claiming
-universal validation or reproduction during this documentation update.
+PNG existence and label uniqueness do not certify quality. Broader manual review
+and end-to-end latency measurement remain future evaluation, not blockers for
+the accepted Phase 3 closure. The roadmap records supplied manual evidence,
+including one owner-confirmed recovery, without claiming universal validation
+or reproduction during this documentation update.
 
 ### 8.6 Manifest policy
 
@@ -420,8 +421,8 @@ configurable `max_tokens`.
 ## 9. Phase C - bounded visual-asset inspection
 
 The catalog, resolver, bounded SDK interaction, and institutional probe are
-implemented on the current branch. Scientific-agent roles and response
-persistence remain later work.
+complete and merged into `main`. Scientific-agent roles and response persistence
+remain later work.
 
 ### 9.1 Why a tool is used
 
@@ -455,8 +456,10 @@ max_assets: int = 6) -> tuple[AssetResolution, ...]` is deterministic. It reject
 empty, repeated, unknown, over-limit, or malformed requests and paths escaping
 the run, including resolved symlinks. It reads only requested assets, in request
 order. The default six-asset count limit is configured, not measured endpoint
-capacity. Hash checks, image-content validation, and byte-payload limits are
-not implemented; the roadmap preserves these acceptance discrepancies.
+capacity. Additional visual-asset hash verification and byte-payload limits are
+deliberately excluded from the accepted resolver scope, not unresolved
+requirements or mandatory future work. Existing source/page hashes and Phase
+1/2 behaviour remain unchanged. Image-content validation is not implemented.
 
 Each resolution contains `asset_id`, `status` (`available` or `unavailable`),
 `media_type`, `image_bytes`, and `reason`. Unavailable entries retain a reason
@@ -872,13 +875,11 @@ Each phase below is intended to have its own ChatGPT Project chat and its own
 short-lived Git branch. The phase chat may contain several small commits, but
 only one commit is implemented and reviewed at a time.
 
-Phase 3 was deliberately subdivided. The 03B figure-extraction increment is
-merged into local `main`; the catalog, resolver, SDK inspection, and probe are
-implemented on `feat/bounded-asset-consuption`. Owner review and merge of that
-branch remain pending, independently of the reported protocol validation.
-Remaining acceptance discrepancies are recorded in roadmap section 11.8.
-The next implementation stages are Architecture and Results, including their
-response persistence. All branch and merge operations remain owner work.
+Phase 3 was deliberately subdivided and is now complete and merged into `main`.
+Local history records the bounded-inspection merge as `6a58c96`; roadmap section
+11.8 distinguishes completed scope, recorded validation, accepted limitations,
+and future evaluation. Phase 4, Architecture Agent, is next, followed by Results.
+Their response persistence remains deferred. All Git mutations remain owner work.
 
 | Phase | Suggested chat | Architectural outcome |
 | --- | --- | --- |
@@ -924,6 +925,8 @@ without new empirical evidence:
 - use the same scientific model to interpret returned images;
 - use the Agents SDK for the bounded conversation, with no repository workflow engine;
 - preserve unavailable-asset reasons without automatic page or model substitution;
+- exclude additional visual-asset hash verification and byte-payload limits
+  from the accepted resolver scope, preserving existing source/page hashes;
 - defer scientific-agent response persistence and destinations to Phases 4 and 5;
 - keep architecture and results interpretation independent;
 - use Markdown evidence reports as intermediate outputs;
@@ -940,9 +943,8 @@ evidence:
 
 - broader validation of the implemented recovery thresholds and rendering defaults;
 - representation or withholding of known problematic crops at the consumer boundary;
-- broader package integrity validation beyond the implemented consumer checks;
 - automatic page fallback, if later justified;
-- measured endpoint capacity and any byte-payload limit beyond the configured count;
+- measured endpoint capacity and end-to-end performance evaluation;
 - endpoint compatibility beyond the two reported protocol probes;
 - the exact Markdown report templates and claim-reference notation;
 - whether either protocol-tested model or another proven candidate fills each
