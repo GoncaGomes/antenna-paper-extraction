@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 from antenna_paper_extraction import architecture
 from antenna_paper_extraction.architecture_report import ARCHITECTURE_INSTRUCTIONS
 from antenna_paper_extraction.persistence import read_json, write_json
+from antenna_paper_extraction.runs import load_run_status
 from antenna_paper_extraction.visual_inspection import VisualInspectionResult
 
 REPORT = """\
@@ -164,6 +165,9 @@ def install_inspection(monkeypatch: pytest.MonkeyPatch):
         ) -> VisualInspectionResult:
             calls.append(run_dir)
 
+            phase = load_run_status(run_dir).phases.architecture_extraction
+            assert phase.state == "running"
+
             assert instructions == ARCHITECTURE_INSTRUCTIONS
             assert max_assets == 3
 
@@ -198,7 +202,7 @@ def test_persists_events_and_publishes_valid_report(
     install_inspection,
 ) -> None:
     calls = install_inspection()
-    original_status = (prepared_run / "status.json").read_bytes()
+    original_status = load_run_status(prepared_run)
 
     report_path = _run(prepared_run)
 
@@ -228,7 +232,18 @@ def test_persists_events_and_publishes_valid_report(
     assert "Visual inspection rules:" in execution["instructions"]
 
     # Global lifecycle integration belongs to the next increment.
-    assert (prepared_run / "status.json").read_bytes() == original_status
+    updated_status = load_run_status(prepared_run)
+    phase = updated_status.phases.architecture_extraction
+
+    assert phase.state == "succeeded"
+    assert phase.started_at is not None
+    assert phase.finished_at is not None
+    assert phase.error is None
+    assert phase.started_at.isoformat() == execution["started_at"]
+
+    assert updated_status.phases.model_dump(
+        exclude={"architecture_extraction"}
+    ) == original_status.phases.model_dump(exclude={"architecture_extraction"})
 
 
 def test_preserves_invalid_final_text_without_publishing_report(
@@ -416,3 +431,43 @@ def test_removes_report_if_success_state_cannot_be_saved(
     assert execution["events"][1]["response"] == _completion(REPORT)
     assert execution["report_path"] is None
     assert not (output_dir / "architecture_evidence_report.md").exists()
+
+
+def _assert_global_failure(run_dir: Path, execution: dict) -> None:
+    phase = load_run_status(run_dir).phases.architecture_extraction
+
+    assert phase.state == "failed"
+    assert phase.started_at is not None
+    assert phase.finished_at is not None
+    assert phase.error is not None
+    assert phase.error.model_dump() == execution["error"]
+
+
+def test_global_success_write_failure_marks_execution_failed(
+    prepared_run: Path,
+    install_inspection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_inspection()
+
+    def fail_global_success(run_dir: Path) -> None:
+        raise OSError("Synthetic global status failure.")
+
+    monkeypatch.setattr(
+        architecture,
+        "mark_architecture_extraction_succeeded",
+        fail_global_success,
+    )
+
+    with pytest.raises(OSError, match="global status failure"):
+        _run(prepared_run)
+
+    output_dir = prepared_run / "architecture"
+    execution = read_json(output_dir / "architecture_execution.json")
+
+    assert execution["state"] == "failed"
+    assert execution["final_text"] == REPORT
+    assert execution["report_path"] is None
+    assert not (output_dir / "architecture_evidence_report.md").exists()
+
+    _assert_global_failure(prepared_run, execution)

@@ -12,8 +12,12 @@ from antenna_paper_extraction.architecture_report import (
 from antenna_paper_extraction.persistence import write_bytes, write_json
 from antenna_paper_extraction.runs import (
     PORTUGAL_TIMEZONE,
+    PhaseFailure,
     RunManifest,
     load_run_status,
+    mark_architecture_extraction_failed,
+    mark_architecture_extraction_running,
+    mark_architecture_extraction_succeeded,
 )
 from antenna_paper_extraction.visual_inspection import (
     InspectionChatCompletionsModel,
@@ -65,6 +69,11 @@ async def run_architecture_agent(
     if run_status.phases.figure_extraction.state != "succeeded":
         raise ValueError(
             "Figure extraction must succeed before architecture extraction."
+        )
+
+    if run_status.phases.architecture_extraction.state != "pending":
+        raise ValueError(
+            "Architecture extraction can only start from the pending state."
         )
 
     report_path = output_dir / "architecture_evidence_report.md"
@@ -124,8 +133,15 @@ async def run_architecture_agent(
         save_execution()
 
     report_written = False
+    phase_started = False
 
     try:
+        running_status = mark_architecture_extraction_running(run_dir)
+        phase_started = True
+
+        running_phase = running_status.phases.architecture_extraction
+        execution["started_at"] = running_phase.model_dump(mode="json")["started_at"]
+
         save_execution()
 
         model = InspectionChatCompletionsModel(
@@ -172,6 +188,8 @@ async def run_architecture_agent(
         execution["report_path"] = report_path.relative_to(run_dir).as_posix()
         save_execution()
 
+        mark_architecture_extraction_succeeded(run_dir)
+
     except Exception as error:
         # Remove only a report created by this execution, if finalization failed.
         if report_written:
@@ -193,10 +211,24 @@ async def run_architecture_agent(
 
         try:
             save_execution()
-        except Exception as persistence_error:
+        except (OSError, TypeError, ValueError) as persistence_error:
             error.add_note(
                 f"Could not persist the final failure state: {persistence_error}"
             )
+
+        if phase_started:
+            try:
+                mark_architecture_extraction_failed(
+                    run_dir,
+                    PhaseFailure(
+                        type=type(error).__name__,
+                        message=str(error),
+                    ),
+                )
+            except (OSError, ValueError) as status_error:
+                error.add_note(
+                    f"Could not persist the global failure state: {status_error}"
+                )
 
         raise
 
