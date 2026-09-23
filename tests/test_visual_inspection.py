@@ -71,20 +71,34 @@ class _InspectionCase:
     payloads: dict[str, bytes]
     requests: list[dict] = field(default_factory=list)
     resolver_calls: list[tuple[str, ...]] = field(default_factory=list)
+    events: list[dict] = field(default_factory=list)
 
     def run(
         self,
         responses: list[httpx.Response | httpx.TransportError],
         *,
         max_assets: int = 3,
+        model_class: type[OpenAIChatCompletionsModel] = (
+            visual_inspection.InspectionChatCompletionsModel
+        ),
+        on_event: visual_inspection.InspectionEventHandler | None = None,
     ) -> visual_inspection.VisualInspectionResult:
+        def record_event(event: dict) -> None:
+            self.events.append(event)
+
+            if on_event is not None:
+                on_event(event)
+
         def respond(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/v1/chat/completions"
             self.requests.append(json.loads(request.content))
             assert len(self.requests) <= len(responses), "Unexpected HTTP request"
+
             response = responses[len(self.requests) - 1]
+
             if isinstance(response, httpx.TransportError):
                 raise response
+
             return response
 
         async def execute() -> visual_inspection.VisualInspectionResult:
@@ -96,10 +110,14 @@ class _InspectionCase:
                     transport=httpx.MockTransport(respond),
                 ),
             ) as client:
-                model = OpenAIChatCompletionsModel(
+                model = model_class(
                     model="test-model",
                     openai_client=client,
                 )
+
+                if isinstance(model, visual_inspection.InspectionChatCompletionsModel):
+                    model.on_event = record_event
+
                 return await visual_inspection.run_visual_inspection(
                     run_dir=self.run_dir,
                     model=model,
@@ -396,5 +414,290 @@ def test_run_visual_inspection_rejects_empty_final_text(
 ) -> None:
     with pytest.raises(RuntimeError, match="Visual inspection returned no final text"):
         inspection_case.run([_completion(text=" ")])
+    assert len(inspection_case.requests) == 1
+    assert inspection_case.resolver_calls == []
+
+
+def _completion(
+    *tool_calls: dict,
+    text: str = FINAL_TEXT,
+    finish_reason: str | None = None,
+) -> httpx.Response:
+    message: dict = {"role": "assistant", "content": text}
+
+    if tool_calls:
+        message.update(content=None, tool_calls=list(tool_calls))
+
+    if finish_reason is None:
+        finish_reason = "tool_calls" if tool_calls else "stop"
+
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "after_tool",
+    [False, True],
+    ids=["direct", "after-tool"],
+)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The antenna consists of a rectangular patch with",
+        "",
+    ],
+    ids=["partial-text", "empty-text"],
+)
+def test_run_visual_inspection_rejects_truncated_final_text(
+    inspection_case: _InspectionCase,
+    after_tool: bool,
+    text: str,
+) -> None:
+    responses: list[httpx.Response] = []
+
+    if after_tool:
+        responses.append(_completion(_asset_call("figure_1")))
+
+    responses.append(
+        _completion(
+            text=text,
+            finish_reason="length",
+        )
+    )
+
+    with pytest.raises(ModelBehaviorError, match="finish_reason='length'"):
+        inspection_case.run(responses)
+
+    assert len(inspection_case.requests) == (2 if after_tool else 1)
+    assert inspection_case.resolver_calls == ([("figure_1",)] if after_tool else [])
+
+
+def test_run_visual_inspection_rejects_truncated_tool_call(
+    inspection_case: _InspectionCase,
+) -> None:
+    response = _completion(
+        _asset_call("figure_1"),
+        finish_reason="length",
+    )
+
+    with pytest.raises(ModelBehaviorError, match="finish_reason='length'"):
+        inspection_case.run([response])
+
+    assert len(inspection_case.requests) == 1
+    assert inspection_case.resolver_calls == []
+
+
+def test_run_visual_inspection_rejects_truncation_after_unavailable_asset(
+    inspection_case: _InspectionCase,
+) -> None:
+    responses = [
+        _completion(_asset_call("figure_2")),
+        _completion(
+            text="The requested figure is unavailable, but",
+            finish_reason="length",
+        ),
+    ]
+
+    with pytest.raises(ModelBehaviorError, match="finish_reason='length'"):
+        inspection_case.run(responses)
+
+    assert len(inspection_case.requests) == 2
+    assert inspection_case.resolver_calls == [("figure_2",)]
+
+
+def test_run_visual_inspection_rejects_unchecked_model(
+    inspection_case: _InspectionCase,
+) -> None:
+    with pytest.raises(TypeError, match="requires InspectionChatCompletionsModel"):
+        inspection_case.run(
+            [],
+            model_class=OpenAIChatCompletionsModel,
+        )
+
+    assert inspection_case.requests == []
+    assert inspection_case.resolver_calls == []
+
+
+def _captured_responses(case: _InspectionCase) -> list[dict]:
+    return [
+        event["response"] for event in case.events if event["type"] == "model_response"
+    ]
+
+
+def test_capture_preserves_completion_fields(
+    inspection_case: _InspectionCase,
+) -> None:
+    payload = _completion().json()
+    payload["usage"] = {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+    }
+    payload["system_fingerprint"] = "test-fingerprint"
+    payload["choices"][0]["message"]["reasoning_content"] = "Test explanation."
+
+    inspection_case.run([httpx.Response(200, json=payload)])
+
+    assert _captured_responses(inspection_case) == [payload]
+    assert [event["type"] for event in inspection_case.events] == [
+        "model_request",
+        "model_response",
+    ]
+
+
+def test_capture_links_tool_results_without_images(
+    inspection_case: _InspectionCase,
+) -> None:
+    def inspect_before_continuation(event: dict) -> None:
+        if event["type"] == "tool_result":
+            assert len(inspection_case.requests) == 1
+
+    first = _completion(_asset_call("figure_1", "figure_2"))
+    final = _completion()
+
+    result = inspection_case.run(
+        [first, final],
+        on_event=inspect_before_continuation,
+    )
+
+    assert result.final_text == FINAL_TEXT
+    assert _captured_responses(inspection_case) == [first.json(), final.json()]
+    assert [event["type"] for event in inspection_case.events] == [
+        "model_request",
+        "model_response",
+        "tool_request",
+        "tool_result",
+        "model_request",
+        "model_response",
+    ]
+    assert inspection_case.events[2] == {
+        "type": "tool_request",
+        "call_id": "call_visual_1",
+        "name": "get_visual_assets",
+        "asset_ids": ["figure_1", "figure_2"],
+    }
+    assert inspection_case.events[3] == {
+        "type": "tool_result",
+        "call_id": "call_visual_1",
+        "status": "succeeded",
+        "assets": [
+            {"asset_id": "figure_1", "status": "available"},
+            {
+                "asset_id": "figure_2",
+                "status": "unavailable",
+                "reason": UNAVAILABLE_REASON,
+            },
+        ],
+    }
+
+    serialized = json.dumps(inspection_case.events)
+
+    assert "data:image/" not in serialized
+
+    for payload in inspection_case.payloads.values():
+        assert base64.b64encode(payload).decode("ascii") not in serialized
+
+
+@pytest.mark.parametrize("after_tool", [False, True])
+def test_capture_preserves_truncated_response(
+    inspection_case: _InspectionCase,
+    after_tool: bool,
+) -> None:
+    responses: list[httpx.Response] = []
+
+    if after_tool:
+        responses.append(_completion(_asset_call("figure_1")))
+
+    responses.append(
+        _completion(
+            text="Partial architecture",
+            finish_reason="length",
+        )
+    )
+
+    with pytest.raises(ModelBehaviorError, match="finish_reason='length'"):
+        inspection_case.run(responses)
+
+    assert _captured_responses(inspection_case) == [
+        response.json() for response in responses
+    ]
+    assert len(inspection_case.requests) == len(responses)
+
+
+@pytest.mark.parametrize("after_tool", [False, True])
+def test_capture_survives_transport_failure(
+    inspection_case: _InspectionCase,
+    after_tool: bool,
+) -> None:
+    first = _completion(_asset_call("figure_1"))
+    responses: list[httpx.Response | httpx.TransportError] = []
+
+    if after_tool:
+        responses.append(first)
+
+    responses.append(httpx.ReadTimeout("Synthetic timeout."))
+
+    with pytest.raises(APITimeoutError):
+        inspection_case.run(responses)
+
+    assert _captured_responses(inspection_case) == (
+        [first.json()] if after_tool else []
+    )
+    assert sum(
+        event["type"] == "model_request" for event in inspection_case.events
+    ) == (2 if after_tool else 1)
+    assert inspection_case.events[-1]["type"] == "model_error"
+    assert inspection_case.events[-1]["error"]["type"] == "APITimeoutError"
+
+    if after_tool:
+        assert inspection_case.events[3]["status"] == "succeeded"
+
+
+def test_capture_preserves_tool_failure(
+    inspection_case: _InspectionCase,
+) -> None:
+    response = _completion(_asset_call("figure_999"))
+
+    with pytest.raises(UserError, match="Unknown visual asset"):
+        inspection_case.run([response])
+
+    assert _captured_responses(inspection_case) == [response.json()]
+
+    event = inspection_case.events[-1]
+
+    assert event["type"] == "tool_result"
+    assert event["call_id"] == "call_visual_1"
+    assert event["status"] == "failed"
+    assert event["error"]["type"] == "ValueError"
+    assert len(inspection_case.requests) == 1
+
+
+def test_capture_failure_stops_before_tool_execution(
+    inspection_case: _InspectionCase,
+) -> None:
+    def fail_recording(event: dict) -> None:
+        if event["type"] == "model_response":
+            raise OSError("Cannot save response.")
+
+    with pytest.raises(OSError, match="Cannot save response"):
+        inspection_case.run(
+            [_completion(_asset_call("figure_1"))],
+            on_event=fail_recording,
+        )
+
     assert len(inspection_case.requests) == 1
     assert inspection_case.resolver_calls == []

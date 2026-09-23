@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 
 import pypdfium2 as pdfium
+from agents.exceptions import AgentsException
 from dotenv import load_dotenv
-from openai import OpenAI, OpenAIError
+from openai import AsyncOpenAI, OpenAI, OpenAIError
 
+from antenna_paper_extraction.architecture import run_architecture_agent
 from antenna_paper_extraction.document import convert_document_to_markdown
 from antenna_paper_extraction.figures import extract_figures
 from antenna_paper_extraction.model_client import OpenAICompatibleClient
@@ -20,6 +24,14 @@ from antenna_paper_extraction.runs import create_run
 
 @dataclass(frozen=True, slots=True)
 class DocumentExtractorSettings:
+    base_url: str
+    api_key: str = field(repr=False)
+    model: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureAgentSettings:
     base_url: str
     api_key: str = field(repr=False)
     model: str
@@ -76,6 +88,57 @@ def load_document_extractor_settings(
     )
 
 
+def load_architecture_agent_settings(
+    environ: Mapping[str, str],
+) -> ArchitectureAgentSettings:
+    base_url = _require_environment_variable(environ, "SKYNET_BASE_URL")
+    api_key = _require_environment_variable(environ, "SKYNET_API_KEY")
+    model = _require_environment_variable(environ, "ARCHITECTURE_AGENT_MODEL")
+    timeout_value = _require_environment_variable(
+        environ,
+        "ARCHITECTURE_AGENT_TIMEOUT_SECONDS",
+    )
+
+    try:
+        timeout_seconds = float(timeout_value)
+    except ValueError:
+        raise ValueError(
+            "ARCHITECTURE_AGENT_TIMEOUT_SECONDS must be a positive finite number."
+        ) from None
+
+    if not isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError(
+            "ARCHITECTURE_AGENT_TIMEOUT_SECONDS must be a positive finite number."
+        )
+
+    return ArchitectureAgentSettings(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def _run_architecture_command(
+    run_dir: Path,
+    settings: ArchitectureAgentSettings,
+    *,
+    max_assets: int,
+) -> Path:
+    async with AsyncOpenAI(
+        base_url=settings.base_url,
+        api_key=settings.api_key,
+        timeout=settings.timeout_seconds,
+        max_retries=0,
+    ) as client:
+        return await run_architecture_agent(
+            run_dir=run_dir,
+            client=client,
+            model_name=settings.model,
+            max_assets=max_assets,
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="antenna-extract")
     subparser = parser.add_subparsers(dest="command", required=True)
@@ -88,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     render_pages = subparser.add_parser("render-pages")
     render_pages.add_argument("run_dir", type=Path, help="Existing run directory")
-    render_pages.add_argument("--dpi", type=int, default=170, help="DPI")
+    render_pages.add_argument("--dpi", type=int, default=300, help="DPI")
 
     convert_document = subparser.add_parser("convert-document")
     convert_document.add_argument(
@@ -111,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_figures_parser.add_argument(
         "--scale",
         type=float,
-        default=3.0,
+        default=4.0,
         help="PDFium rendering scale (default: 3.0, approximately 216 DPI)",
     )
     extract_figures_parser.add_argument(
@@ -119,6 +182,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         help="Crop margin in PDF points (default: 2.0)",
+    )
+
+    extract_architecture_parser = subparser.add_parser(
+        "extract-architecture",
+        help="Generate an evidence-grounded architecture report",
+    )
+    extract_architecture_parser.add_argument(
+        "run_dir",
+        type=Path,
+        help="Existing run directory with successful figure extraction",
+    )
+    extract_architecture_parser.add_argument(
+        "--max-assets",
+        type=int,
+        default=6,
+        help="Maximum assets in the single visual request (default: 6)",
     )
 
     return parser
@@ -189,6 +268,39 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
         print(f"Figure manifest: {manifest_path.resolve()}")
+        return 0
+
+    if args.command == "extract-architecture":
+        if args.max_assets < 1:
+            parser.error("--max-assets must be positive")
+
+        try:
+            load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+            settings = load_architecture_agent_settings(os.environ)
+
+            report_path = asyncio.run(
+                _run_architecture_command(
+                    args.run_dir,
+                    settings,
+                    max_assets=args.max_assets,
+                )
+            )
+
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            OpenAIError,
+            AgentsException,
+        ) as error:
+            print(f"Failed to extract architecture. {error}", file=sys.stderr)
+
+            for note in getattr(error, "__notes__", ()):
+                print(note, file=sys.stderr)
+
+            return 1
+
+        print(f"Architecture report: {report_path.resolve()}")
         return 0
 
     parser.error(f"unrecognized command: {args.command}")

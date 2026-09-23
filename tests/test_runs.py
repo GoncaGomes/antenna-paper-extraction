@@ -536,6 +536,7 @@ def test_existing_transitions_preserve_other_phase_states(
 
     payload = current.model_dump(mode="json")
     payload["phases"]["figure_extraction"] = sentinel.model_dump(mode="json")
+    payload["phases"]["architecture_extraction"] = sentinel.model_dump(mode="json")
 
     if phase_name == "page_rendering":
         payload["phases"]["document_conversion"] = sentinel.model_dump(mode="json")
@@ -561,6 +562,108 @@ def test_existing_transitions_preserve_other_phase_states(
     updated = runs.load_run_status(run_dir)
 
     assert updated.phases.figure_extraction == sentinel
+    assert updated.phases.architecture_extraction == sentinel
 
     if phase_name == "page_rendering":
         assert updated.phases.document_conversion == sentinel
+
+
+@pytest.fixture
+def architecture_ready_run(figure_ready_run: Path) -> Path:
+    runs.mark_figure_extraction_running(figure_ready_run)
+    runs.mark_figure_extraction_succeeded(figure_ready_run)
+    return figure_ready_run
+
+
+def test_old_status_defaults_architecture_to_pending(
+    architecture_ready_run: Path,
+) -> None:
+    status_path = architecture_ready_run / "status.json"
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    del payload["phases"]["architecture_extraction"]
+    status_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    status = runs.load_run_status(architecture_ready_run)
+
+    assert status.phases.architecture_extraction == runs.PhaseStatus(state="pending")
+
+    runs.mark_architecture_extraction_running(architecture_ready_run)
+
+    persisted = read_json(status_path)
+    assert persisted["phases"]["architecture_extraction"]["state"] == "running"
+
+
+@pytest.mark.parametrize("outcome", ["succeeded", "failed"])
+def test_architecture_lifecycle_preserves_other_phases(
+    architecture_ready_run: Path,
+    outcome: str,
+) -> None:
+    initial = runs.load_run_status(architecture_ready_run)
+    running = runs.mark_architecture_extraction_running(architecture_ready_run)
+
+    assert running.phases.architecture_extraction.state == "running"
+
+    with pytest.raises(ValueError, match="pending state"):
+        runs.mark_architecture_extraction_running(architecture_ready_run)
+
+    failure = runs.PhaseFailure(
+        type="RuntimeError",
+        message="Synthetic architecture failure.",
+    )
+
+    if outcome == "succeeded":
+        completed = runs.mark_architecture_extraction_succeeded(architecture_ready_run)
+    else:
+        completed = runs.mark_architecture_extraction_failed(
+            architecture_ready_run,
+            failure,
+        )
+
+    phase = completed.phases.architecture_extraction
+
+    assert runs.load_run_status(architecture_ready_run) == completed
+    assert phase.state == outcome
+    assert phase.started_at == running.phases.architecture_extraction.started_at
+    assert phase.finished_at is not None
+    assert phase.finished_at >= phase.started_at
+    assert phase.error == (failure if outcome == "failed" else None)
+
+    assert completed.phases.model_dump(
+        exclude={"architecture_extraction"}
+    ) == initial.phases.model_dump(exclude={"architecture_extraction"})
+
+    with pytest.raises(ValueError, match="pending state"):
+        runs.mark_architecture_extraction_running(architecture_ready_run)
+
+
+def test_architecture_requires_completed_figure_extraction(
+    figure_ready_run: Path,
+) -> None:
+    initial = runs.load_run_status(figure_ready_run)
+
+    with pytest.raises(ValueError, match="Figure extraction must succeed"):
+        runs.mark_architecture_extraction_running(figure_ready_run)
+
+    assert runs.load_run_status(figure_ready_run) == initial
+
+
+@pytest.mark.parametrize("outcome", ["succeeded", "failed"])
+def test_architecture_cannot_finish_before_starting(
+    architecture_ready_run: Path,
+    outcome: str,
+) -> None:
+    initial = runs.load_run_status(architecture_ready_run)
+
+    with pytest.raises(ValueError, match="running state"):
+        if outcome == "succeeded":
+            runs.mark_architecture_extraction_succeeded(architecture_ready_run)
+        else:
+            runs.mark_architecture_extraction_failed(
+                architecture_ready_run,
+                runs.PhaseFailure(
+                    type="RuntimeError",
+                    message="Synthetic failure.",
+                ),
+            )
+
+    assert runs.load_run_status(architecture_ready_run) == initial

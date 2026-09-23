@@ -113,6 +113,9 @@ class RunPhases(BaseModel):
     figure_extraction: PhaseStatus = Field(
         default_factory=lambda: PhaseStatus(state="pending")
     )
+    architecture_extraction: PhaseStatus = Field(
+        default_factory=lambda: PhaseStatus(state="pending")
+    )
 
 
 class RunStatus(BaseModel):
@@ -238,6 +241,7 @@ def mark_page_rendering_running(run_dir: Path) -> RunStatus:
             page_rendering=PhaseStatus(state="running", started_at=started_at),
             document_conversion=current_status.phases.document_conversion,
             figure_extraction=current_status.phases.figure_extraction,
+            architecture_extraction=current_status.phases.architecture_extraction,
         ),
     )
     write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
@@ -272,6 +276,7 @@ def mark_page_rendering_succeeded(run_dir: Path) -> RunStatus:
             ),
             document_conversion=current_status.phases.document_conversion,
             figure_extraction=current_status.phases.figure_extraction,
+            architecture_extraction=current_status.phases.architecture_extraction,
         ),
     )
     write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
@@ -302,6 +307,7 @@ def mark_page_rendering_failed(run_dir: Path, failure: PhaseFailure) -> RunStatu
             ),
             document_conversion=current_status.phases.document_conversion,
             figure_extraction=current_status.phases.figure_extraction,
+            architecture_extraction=current_status.phases.architecture_extraction,
         ),
     )
     write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
@@ -331,6 +337,7 @@ def mark_document_conversion_running(run_dir: Path) -> RunStatus:
             page_rendering=current_status.phases.page_rendering,
             document_conversion=PhaseStatus(state="running", started_at=started_at),
             figure_extraction=current_status.phases.figure_extraction,
+            architecture_extraction=current_status.phases.architecture_extraction,
         ),
     )
 
@@ -361,6 +368,7 @@ def mark_document_conversion_succeeded(run_dir: Path) -> RunStatus:
                 finished_at=finished_at,
             ),
             figure_extraction=current_status.phases.figure_extraction,
+            architecture_extraction=current_status.phases.architecture_extraction,
         ),
     )
     write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
@@ -391,6 +399,7 @@ def mark_document_conversion_failed(run_dir: Path, failure: PhaseFailure) -> Run
                 error=failure,
             ),
             figure_extraction=current_status.phases.figure_extraction,
+            architecture_extraction=current_status.phases.architecture_extraction,
         ),
     )
     write_json(run_dir / "status.json", updated_status.model_dump(mode="json"))
@@ -475,6 +484,102 @@ def mark_figure_extraction_failed(
 
     updated_phases = current_status.phases.model_copy(
         update={"figure_extraction": phase_status}
+    )
+    updated_status = current_status.model_copy(update={"phases": updated_phases})
+
+    write_json(
+        run_dir / "status.json",
+        updated_status.model_dump(mode="json"),
+    )
+
+    return updated_status
+
+
+def mark_architecture_extraction_running(run_dir: Path) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+
+    if current_status.phases.figure_extraction.state != "succeeded":
+        raise ValueError(
+            "Figure extraction must succeed before architecture extraction."
+        )
+
+    current_phase = current_status.phases.architecture_extraction
+
+    if current_phase.state != "pending":
+        raise ValueError(
+            "Architecture extraction can only start from the pending state."
+        )
+
+    phase_status = PhaseStatus(
+        state="running",
+        started_at=datetime.now(PORTUGAL_TIMEZONE),
+    )
+
+    updated_phases = current_status.phases.model_copy(
+        update={"architecture_extraction": phase_status}
+    )
+    updated_status = current_status.model_copy(update={"phases": updated_phases})
+
+    write_json(
+        run_dir / "status.json",
+        updated_status.model_dump(mode="json"),
+    )
+
+    return updated_status
+
+
+def mark_architecture_extraction_succeeded(run_dir: Path) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+    current_phase = current_status.phases.architecture_extraction
+
+    if current_phase.state != "running":
+        raise ValueError(
+            "Architecture extraction can only succeed from the running state."
+        )
+
+    phase_status = PhaseStatus(
+        state="succeeded",
+        started_at=current_phase.started_at,
+        finished_at=datetime.now(PORTUGAL_TIMEZONE),
+    )
+
+    updated_phases = current_status.phases.model_copy(
+        update={"architecture_extraction": phase_status}
+    )
+    updated_status = current_status.model_copy(update={"phases": updated_phases})
+
+    write_json(
+        run_dir / "status.json",
+        updated_status.model_dump(mode="json"),
+    )
+
+    return updated_status
+
+
+def mark_architecture_extraction_failed(
+    run_dir: Path,
+    failure: PhaseFailure,
+) -> RunStatus:
+    run_dir = Path(run_dir)
+    current_status = load_run_status(run_dir)
+    current_phase = current_status.phases.architecture_extraction
+
+    if current_phase.state != "running":
+        raise ValueError(
+            "Architecture extraction can only fail from the running state."
+        )
+
+    phase_status = PhaseStatus(
+        state="failed",
+        started_at=current_phase.started_at,
+        finished_at=datetime.now(PORTUGAL_TIMEZONE),
+        error=failure,
+    )
+
+    updated_phases = current_status.phases.model_copy(
+        update={"architecture_extraction": phase_status}
     )
     updated_status = current_status.model_copy(update={"phases": updated_phases})
 
