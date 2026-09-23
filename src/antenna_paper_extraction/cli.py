@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     render_pages = subparser.add_parser("render-pages")
     render_pages.add_argument("run_dir", type=Path, help="Existing run directory")
-    render_pages.add_argument("--dpi", type=int, default=170, help="DPI")
+    render_pages.add_argument("--dpi", type=int, default=300, help="DPI")
 
     convert_document = subparser.add_parser("convert-document")
     convert_document.add_argument(
@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_figures_parser.add_argument(
         "--scale",
         type=float,
-        default=3.0,
+        default=4.0,
         help="PDFium rendering scale (default: 3.0, approximately 216 DPI)",
     )
     extract_figures_parser.add_argument(

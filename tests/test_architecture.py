@@ -246,25 +246,59 @@ def test_persists_events_and_publishes_valid_report(
     ) == original_status.phases.model_dump(exclude={"architecture_extraction"})
 
 
-def test_preserves_invalid_final_text_without_publishing_report(
+@pytest.mark.parametrize(
+    ("candidate_report", "expected_error"),
+    [
+        pytest.param(
+            "A report without the required sections.",
+            "The report must contain the five required sections in order.",
+            id="missing-sections",
+        ),
+        pytest.param(
+            REPORT.replace(
+                "The supplied material does not identify a final antenna design.",
+                (
+                    "- A001 [Reported, with stated inferred continuity] "
+                    "Applicability to the final design is inferred.\n"
+                    "  Evidence: Section 3 and Section 6."
+                ),
+            ),
+            "A001 must have a supported classification and claim text.",
+            id="extended-classification",
+        ),
+    ],
+)
+def test_publishes_report_with_structural_diagnostics(
     prepared_run: Path,
     install_inspection,
+    candidate_report: str,
+    expected_error: str,
 ) -> None:
-    invalid_report = "A report without the required sections."
-    install_inspection(final_text=invalid_report)
+    calls = install_inspection(final_text=candidate_report)
 
-    with pytest.raises(ValueError, match="failed structural validation"):
-        _run(prepared_run)
+    report_path = _run(prepared_run)
 
-    output_dir = prepared_run / "architecture"
-    execution = read_json(output_dir / "architecture_execution.json")
+    assert calls == [prepared_run.resolve()]
+    assert report_path.read_text(encoding="utf-8") == candidate_report
 
-    assert execution["state"] == "failed"
-    assert execution["final_text"] == invalid_report
-    assert execution["structural_validation"]["passed"] is False
-    assert execution["structural_validation"]["errors"]
-    assert execution["error"]["type"] == "ValueError"
-    assert not (output_dir / "architecture_evidence_report.md").exists()
+    execution = read_json(prepared_run / "architecture" / "architecture_execution.json")
+
+    assert execution["state"] == "succeeded"
+    assert execution["final_text"] == candidate_report
+    assert execution["structural_validation"] == {
+        "passed": False,
+        "errors": [expected_error],
+    }
+    assert execution["report_path"] == ("architecture/architecture_evidence_report.md")
+    assert execution["events"][1]["response"] == _completion(candidate_report)
+    assert execution["error"] is None
+    assert execution["finished_at"] is not None
+
+    phase = load_run_status(prepared_run).phases.architecture_extraction
+
+    assert phase.state == "succeeded"
+    assert phase.error is None
+    assert phase.finished_at is not None
 
 
 def test_preserves_truncated_response_without_publishing_report(

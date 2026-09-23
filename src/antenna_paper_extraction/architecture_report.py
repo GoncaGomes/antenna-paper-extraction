@@ -12,79 +12,101 @@ ARCHITECTURE_INSTRUCTIONS = """\
 Extract an evidence-grounded technical description of the antenna architecture.
 Write the report in English.
 
-The report will support a later canonicalization step. Preserve the details
-needed for reconstruction. Do not produce the final architecture JSON or a
-CAD specification.
+The report will support later canonicalization. Preserve the information needed
+to reconstruct the supported design, including uncertainty and missing details.
+Do not produce the final architecture JSON or a CAD specification.
 
-Target selection:
-- Describe the final design supported by the paper.
-- Prefer the final fabricated or measured design when the paper identifies it.
-- A final design may be simulated only. Do not imply fabrication or measurement
-  without evidence.
-- Mention earlier iterations briefly to explain the design evolution. Do not
-  reproduce their architectures or mix their dimensions into the final design.
-- Reuse information from an earlier iteration only when the paper supports its
-  applicability to the final design.
-- If the final design cannot be identified, explain the ambiguity and keep
-  candidate-specific information separate.
+Target and scope:
+- Identify the final design supported by the paper and its validation status.
+  Prefer the final fabricated or measured design when identified. A final design
+  may be simulated only; do not imply fabrication or measurement without evidence.
+- If the paper presents multiple final designs, describe them separately. If the
+  final design is ambiguous, explain the ambiguity without selecting arbitrarily.
+- Distinguish individual elements from arrays or assemblies, and distinguish
+  physical configurations or operating states when their geometry differs.
+- Mention earlier iterations only to explain the final selection or a relevant
+  design change. Do not reproduce their architectures or parameter inventories.
+- Carry earlier information into the final design only with evidence of its
+  applicability. State any inferred continuity alongside the affected claim.
+- Describe the implemented design. Keep proposed but unapplied changes separate.
+- Include performance results only when needed to establish design selection
+  or validation status.
 
 Architecture coverage:
-- Preserve components, geometry, materials, material properties, layer order,
-  thicknesses, dimensions, units, symbols, spatial relationships and repetitions.
+- Preserve components, materials and their properties, layers, thicknesses,
+  dimensions, units, symbols, spatial relationships and repetitions.
 - Describe feeds, grounds, ports, vias, connections and surrounding structures
-  when supported.
-- Distinguish added material from removed material, including slots and holes.
-- Preserve the meaning of dimensional symbols. Do not rename a parameter as a
-  physical length or width unless the evidence supports that interpretation.
-- Include source-supported equations or derivations needed to determine geometry.
-- Do not invent coordinates, conductor properties, feed details, solver settings
-  or conventional defaults.
-- Do not extract a performance-results inventory. Mention results only when
-  necessary to establish the selected design or its validation status.
+  when supported. Distinguish physical components from simulation constructs.
+- Distinguish conducting regions, dielectric regions and removed material.
+- Associate each parameter with its component, variant and geometric meaning.
+  Preserve the source symbol when its meaning cannot be established.
+- Keep values and their qualifications together. Distinguish nominal, optimized,
+  simulated and measured values when the paper makes that distinction.
+- Do not invent coordinates, material properties, connection details, solver
+  settings or conventional defaults. Do not propose choices to fill gaps.
 
-Evidence:
-- Ground factual claims in the supplied document or visual assets actually
-  received through the tool.
-- Cite a document section, table or equation label with a short source-faithful
-  excerpt where useful. Do not invent page numbers.
-- For visual observations, cite the exact received asset identifier and the
-  relevant panel or visible feature.
-- A caption is textual evidence. Reading a caption does not mean that you
-  inspected the image.
-- Image alt descriptions in the converted Markdown may have been generated
-  during conversion. Do not treat them as original paper statements or as
-  evidence that you inspected an image.
+Visual interpretation:
+- Use the text and captions to establish which design, panel and configuration
+  an image represents before applying its contents to the selected design.
+- Interpret a dimension using its arrows and extension lines: identify the
+  feature, direction and both endpoints. Do not replace an unclear endpoint
+  with a plausible centerline, edge or connection.
+- Use clearly visible geometry even when the text does not define it verbally.
+  If a label, endpoint or connection is unclear, preserve that specific uncertainty.
 - Do not estimate exact dimensions from drawing proportions or pixels.
-- Preserve conflicts between sources. Do not silently choose a convenient value.
-- For a derivation, state the premises, the relation used and the evidence for
-  the premises. Do not present the derived value as directly reported.
+- Distinguish observation from inference: appearance alone does not establish
+  material composition, and a visible line termination does not define a port.
+- An inspected image supports only what it shows. A generic schematic or an
+  earlier prototype does not automatically establish the final geometry.
+
+Evidence and uncertainty:
+- Ground claims in the supplied document or visual assets actually received.
+  Cite a section, table or equation label, with a short faithful excerpt if useful.
+  Do not invent page numbers.
+- For visual observations, cite the exact received asset identifier and the
+  relevant panel or feature.
+- Captions are textual evidence, not proof of image inspection. Converted image
+  alt descriptions may be generated; do not treat them as original paper
+  statements or as evidence that you inspected an image.
+- Distinguish information absent from the supplied material, an unavailable
+  image, an unreadable feature and contradictory evidence.
+- Lack of mention does not prove that a component or feature is absent.
+- Report a conflict when sources make incompatible claims about the same
+  property, design and conditions. First consider rounding, units, naming
+  conventions and differences between variants or validation stages.
+- Preserve unresolved alternatives and their sources. Do not silently select
+  a preferred value, repair an equation or resolve an ambiguity by convention.
+- Include equations and derivations only when needed to establish geometry
+  or explain a reconstruction-relevant inconsistency. Do not reproduce the
+  paper's general theory or audit every equation.
+- For a derivation, state the supported premises, relation and result. Keep
+  inferred conclusions distinct from directly reported or observed information.
 
 Report format:
 - Return only the Markdown report, without enclosing code fences.
 - Use the five exact second-level headings listed below, in that order.
-- Each section must contain substantive content or an explicit statement that
-  the relevant information is unavailable or not applicable.
-- Define each relevant technical claim as a top-level bullet using this form:
+- Each section must contain relevant content or a brief statement that the
+  information is unavailable or not applicable. Do not manufacture derivations
+  or conflicts to fill a section.
+- Define each relevant technical claim as a top-level bullet:
   - A001 [Reported] Claim text.
     Evidence: Source reference.
-- Use unique claim identifiers, starting at A001.
-- Use only these claim classifications:
-  Reported: information explicitly stated in the paper.
-  Visual: an observation from an image actually received.
-  Derived: a conclusion calculated or inferred from stated premises.
+- Use unique claim identifiers, starting at A001, and only these classifications:
+  Reported: explicitly stated in the source text, table, equation or caption.
+  Visual: directly observed in an image actually received.
+  Derived: calculated or inferred from identified, supported premises.
 - Put a non-empty, indented Evidence: line within each claim.
-- Tables and additional paragraphs may appear within a claim when they share
-  its classification and evidence. Split claims when their sources or
-  classifications differ.
-- Refer back to an existing claim by its identifier without defining it again.
-- Describe missing information, ambiguity and unresolved conflicts in ordinary
-  prose or ordinary bullets. Do not turn these into unsupported factual claims.
-- Do not propose engineering choices to fill gaps. If the paper proposes an
-  unapplied change, identify it as unapplied and keep it separate from the design.
-- Avoid repetition, but do not omit reconstruction-critical detail to make the
-  report shorter.
+- Split claims when their classifications or applicability differ. Tables may
+  group parameters that share the same classification, applicability and evidence.
+- Refer back to existing claim identifiers instead of repeating their content.
+- Describe gaps, ambiguity and unresolved conflicts in ordinary prose or bullets,
+  referring to the relevant claims where useful.
+- Keep uncertainty beside the affected claim; do not assert a fact confidently
+  and qualify it only in the final section.
+- Prioritize reconstruction-critical detail. Avoid repeated results, background
+  theory and earlier-design detail that does not establish the final architecture.
 - An honest incomplete report is acceptable. If no supported architecture claims
-  can be extracted, explain that limitation instead of inventing claims.
+  can be extracted, explain the limitation instead of inventing claims.
 
 Required sections:
 """ + "\n".join(REPORT_SECTIONS)

@@ -37,8 +37,9 @@ async def run_architecture_agent(
 
     The caller owns the client and must disable automatic retries.
     Existing architecture output directories are never overwritten.
-    Success means execution and structural validation succeeded.
-    It does not mean that the report passed scientific review.
+    Success means execution and report persistence succeeded.
+    Structural validation is diagnostic and does not block publication.
+    Success does not imply scientific approval.
     """
     if not model_name.strip():
         raise ValueError("Architecture model name must not be empty.")
@@ -171,14 +172,8 @@ async def run_architecture_agent(
             "errors": list(validation_errors),
         }
 
-        # Preserve the candidate report and validation before accepting it.
+        # Preserve the response and diagnostics before publishing the report.
         save_execution()
-
-        if validation_errors:
-            raise ValueError(
-                "Architecture report failed structural validation: "
-                + "; ".join(validation_errors)
-            )
 
         write_bytes(report_path, result.final_text.encode("utf-8"))
         report_written = True

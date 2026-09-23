@@ -28,14 +28,30 @@ from antenna_paper_extraction.runs import (
     mark_document_conversion_succeeded,
 )
 
-DOCUMENT_CONVERSION_INSTRUCTION = (
-    "Convert the following page images into one Markdown document "
-    "in the provided order. Preserve the complete readable content, "
-    "including headings, prose, tables, equations, figure and table "
-    "captions, labels, symbols, units, footnotes, and references. Don't lose the"
-    "top page text"
-    "Do not summarize, omit, interpret, or reorder the content."
-)
+DOCUMENT_CONVERSION_INSTRUCTION = """\
+Convert the supplied page images into one Markdown document in page order.
+
+Preserve all readable source content: headings, prose, tables, equations,
+figure and table captions, labels, symbols, units, footnotes and references.
+Include text at the top and bottom of every page, including paragraphs
+continued from a previous page.
+
+Transcribe the source faithfully. Do not summarize, interpret, correct,
+complete or reorder its content.
+
+Preserve figure blocks, image references and printed captions. Keep each
+caption associated with its figure and preserve its printed figure label.
+
+Do not generate image descriptions or alternative text. For HTML images,
+use an empty alt attribute: alt="". For Markdown images, use empty alternative
+text: ![](image_reference). Keep the printed caption outside the alternative
+text; do not omit it or replace it with a generated description.
+
+Preserve readable text, labels and annotations printed inside figures,
+without interpreting their visual meaning. Do not infer values from curves,
+colors, shapes or proportions, and do not add descriptions of what an image
+appears to show.
+"""
 DOCUMENT_CONVERSION_BATCH_SIZE = 8
 
 
@@ -162,7 +178,7 @@ def convert_document_to_markdown(
             f"Document conversion output already exists: {existing_names}"
         )
 
-    temperature = 0.0
+    temperature = 0.2
     mode: Literal["markdown"] = "markdown"
     enable_thinking = False
 
