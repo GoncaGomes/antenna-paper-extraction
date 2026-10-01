@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from mcp.types import (
 )
 from pypdf import PdfWriter
 
+from antenna_paper_extraction import persistence
 from antenna_paper_extraction.persistence import write_json
 from antenna_paper_extraction.runs import create_run, sha256_file
 
@@ -64,11 +66,12 @@ def fake_connection(monkeypatch, configured_run):
     run_dir, _, _ = configured_run
     digest = sha256_file(run_dir / "input" / "paper with spaces.pdf")
 
-    class FakeConnection:
+    class FakeConnection(probe.QuietStdioServer):
         def __init__(self):
             self.tools = sorted(probe.EXPECTED_TOOLS)
             self.result = overview_result(digest)
             self.calls = []
+            self.metas = []
             self.entered = False
             self.closed = False
 
@@ -82,8 +85,12 @@ def fake_connection(monkeypatch, configured_run):
         async def list_tools(self):
             return [SimpleNamespace(name=name) for name in self.tools]
 
-        async def call_tool(self, name, arguments):
+        async def execute_tool(self, name, arguments, meta=None):
+            saved = json.loads(self.trace.path.read_text(encoding="utf-8"))
+            assert saved["calls"][-1]["state"] == "started"
+            assert saved["calls"][-1]["tool_name"] == name
             self.calls.append((name, arguments))
+            self.metas.append(meta)
             if isinstance(self.result, BaseException):
                 raise self.result
             return self.result
@@ -92,8 +99,13 @@ def fake_connection(monkeypatch, configured_run):
 
     def factory(**kwargs):
         connection.configuration = kwargs
+        connection.trace = kwargs["trace"]
         return connection
 
+    async def base_call(server, tool_name, arguments, meta=None):
+        return await server.execute_tool(tool_name, arguments, meta)
+
+    monkeypatch.setattr(probe.MCPServerStdio, "call_tool", base_call)
     monkeypatch.setattr(probe, "QuietStdioServer", factory)
     return connection
 
@@ -123,7 +135,13 @@ def test_matching_identity_and_only_overview(
     assert fake_connection.entered and fake_connection.closed
     assert fake_connection.calls == [("get_paper_overview", {})]
     assert not (run_dir / "pages").exists()
-    assert not (run_dir / "mcp").exists()  # The probe itself creates no store.
+    assert not (run_dir / "mcp" / "store").exists()
+    assert len(list((run_dir / "mcp").iterdir())) == 1
+    trace = read_trace(run_dir)
+    assert trace["state"] == "succeeded"
+    assert trace["run_id"] == json.loads(before["manifest.json"])["run_id"]
+    assert trace["document_id"] == json.loads(before["manifest.json"])["document_id"]
+    assert trace["calls"][0]["state"] == "returned"
     assert before == {name: (run_dir / name).read_bytes() for name in before}
     config = fake_connection.configuration
     assert config["params"]["command"] == str(executable.resolve())
@@ -133,6 +151,12 @@ def test_matching_identity_and_only_overview(
     assert config["max_retry_attempts"] == 0
     assert config["failure_error_function"] is None
     assert "Connection verified; model calls: 0." in capsys.readouterr().out
+
+
+def read_trace(run_dir):
+    paths = list((run_dir / "mcp").glob("probe_connection_*.json"))
+    assert len(paths) == 1
+    return json.loads(paths[0].read_text(encoding="utf-8"))
 
 
 def test_child_environment_preserves_launch_paths_without_credentials(
@@ -189,6 +213,7 @@ def test_reject_invalid_pdf_identity_or_path_before_startup(
         asyncio.run(probe.probe(*configured_run))
     assert not fake_connection.entered
     assert not hasattr(fake_connection, "configuration")
+    assert not (run_dir / "mcp").exists()
 
 
 @pytest.mark.parametrize("change", ["missing", "identity", "pending"])
@@ -246,6 +271,7 @@ def test_exact_tool_discovery(configured_run, fake_connection, change):
         asyncio.run(probe.probe(*configured_run))
     assert fake_connection.closed
     assert fake_connection.calls == []
+    assert read_trace(configured_run[0])["state"] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -277,6 +303,14 @@ def test_overview_failures_close_connection(
     with pytest.raises(probe.ProbeError, match=diagnostic):
         asyncio.run(probe.probe(*configured_run))
     assert fake_connection.closed
+    trace = read_trace(configured_run[0])
+    assert trace["state"] == "failed"
+    assert trace["calls"][0]["state"] == (
+        "mcp_error" if response.model_dump(by_alias=True)["isError"] else "returned"
+    )
+    assert trace["calls"][0]["response"] == response.model_dump(
+        mode="json", by_alias=True
+    )
 
 
 def arguments(configured_run):
@@ -308,10 +342,320 @@ def test_cancellation_exit_code(configured_run, fake_connection, capsys):
     output = capsys.readouterr()
     assert "cancelled" in output.err
     assert "Connection verified" not in output.out
+    trace = read_trace(configured_run[0])
+    assert trace["state"] == "cancelled"
+    assert trace["calls"][0]["state"] == "cancelled"
+    assert trace["calls"][0]["exception_type"] == "CancelledError"
+
+
+def test_ordered_complete_responses_saved_before_return(
+    configured_run, fake_connection
+):
+    run_dir, _, _ = configured_run
+    manifest, _, _ = probe.verify_run(run_dir.resolve())
+    fake_connection.trace = probe.ProbeTrace(run_dir, manifest)
+    payload = json.loads(fake_connection.result.content[0].text)
+    payload["outline"] = [{"title": "Geometry", "pages": [1]}]
+    payload["evidence"] = "Ordinary evidence beyond identity fields."
+    fake_connection.result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(payload))],
+        structuredContent={"extra": [1, {"value": "complete evidence"}]},
+        _meta={"server_marker": "preserved"},
+    )
+    expected = fake_connection.result.model_dump(mode="json", by_alias=True)
+
+    async def exercise():
+        for index in range(2):
+            result = await fake_connection.call_tool(
+                "get_paper_overview", {"index": index}, meta={"test": index}
+            )
+            saved = read_trace(run_dir)
+            assert len(saved["calls"]) == index + 1
+            assert saved["calls"][-1]["response"] == expected
+            assert result is fake_connection.result
+            assert probe.decode_overview(result).document_id == payload["document_id"]
+
+    asyncio.run(exercise())
+    trace = read_trace(run_dir)
+    first, second = trace["calls"]
+    assert first["call_id"] != second["call_id"]
+    assert fake_connection.metas == [{"test": 0}, {"test": 1}]
+    assert [call["arguments"] for call in trace["calls"]] == [
+        {"index": 0},
+        {"index": 1},
+    ]
+    for call in trace["calls"]:
+        assert call["trace_id"] == trace["trace_id"]
+        assert call["call_id_source"] == "locally_generated"
+        assert call["state"] == "returned"
+        assert call["elapsed_seconds"] >= 0
+        assert datetime.fromisoformat(call["started_at"]).utcoffset() is not None
+        assert datetime.fromisoformat(call["finished_at"]) >= datetime.fromisoformat(
+            call["started_at"]
+        )
+    assert datetime.fromisoformat(trace["started_at"]).utcoffset() is not None
+
+
+def test_response_persisted_before_identity_validation(
+    configured_run, fake_connection, monkeypatch
+):
+    decode = probe.decode_overview
+
+    def checked_decode(result):
+        saved = read_trace(configured_run[0])
+        assert saved["state"] == "running"
+        assert saved["calls"][0]["response"] == result.model_dump(
+            mode="json", by_alias=True
+        )
+        assert saved["calls"][0]["state"] == "returned"
+        return decode(result)
+
+    monkeypatch.setattr(probe, "decode_overview", checked_decode)
+    asyncio.run(probe.probe(*configured_run))
+
+
+@pytest.mark.parametrize("failed_write", [1, 2, 3, 4])
+def test_required_persistence_failure_stops_probe_and_keeps_last_trace(
+    configured_run, fake_connection, monkeypatch, capsys, failed_write
+):
+    replace = persistence.os.replace
+    writes = []
+    previous = []
+    decoded = []
+    decode = probe.decode_overview
+
+    def checked_decode(result):
+        decoded.append(result)
+        return decode(result)
+
+    def failing_replace(source, destination):
+        writes.append(destination)
+        if len(writes) == failed_write:
+            previous.append(destination.read_bytes() if destination.exists() else None)
+            raise OSError("external sensitive persistence error")
+        replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", failing_replace)
+    monkeypatch.setattr(probe, "decode_overview", checked_decode)
+    assert probe.main(arguments(configured_run)) == 1
+    output = capsys.readouterr()
+    assert "trace persistence failed" in output.err
+    assert "external sensitive" not in output.out + output.err
+    assert "Connection verified" not in output.out
+    assert len(fake_connection.calls) == (1 if failed_write >= 3 else 0)
+    assert len(decoded) == (1 if failed_write == 4 else 0)
+    assert len(writes) == failed_write
+    if failed_write == 1:
+        assert not fake_connection.entered
+        assert not writes[-1].exists()
+    else:
+        assert fake_connection.closed
+        assert "Trace:" in output.out
+        assert writes[-1].read_bytes() == previous[0]
+        saved = read_trace(configured_run[0])
+        assert saved["state"] == "running"
+        if failed_write == 2:
+            assert saved["calls"] == []
+        else:
+            assert saved["calls"][0]["state"] == (
+                "started" if failed_write == 3 else "returned"
+            )
+    assert not list((configured_run[0] / "mcp").glob("*.tmp"))
 
 
 @pytest.mark.parametrize(
-    "outcome", ["success", "mismatch", "cancel", "startup_cancel", "startup_error"]
+    "outcome, failed_write",
+    [
+        ("transport", 3),
+        ("transport", 4),
+        ("cancel", 3),
+        ("cancel", 4),
+        ("validation", 4),
+    ],
+)
+def test_diagnostic_write_failure_does_not_hide_original_outcome(
+    configured_run, fake_connection, monkeypatch, capsys, outcome, failed_write
+):
+    if outcome == "transport":
+        fake_connection.result = RuntimeError("sensitive transport message")
+    elif outcome == "cancel":
+        fake_connection.result = asyncio.CancelledError("sensitive cancellation")
+    else:
+        fake_connection.result = overview_result("0" * 64)
+    replace = persistence.os.replace
+    writes = []
+
+    def failing_replace(source, destination):
+        writes.append(destination)
+        if len(writes) == failed_write:
+            raise OSError("sensitive diagnostic write failure")
+        replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", failing_replace)
+    assert probe.main(arguments(configured_run)) == (130 if outcome == "cancel" else 1)
+    assert fake_connection.closed
+    output = capsys.readouterr()
+    assert "sensitive" not in output.out + output.err
+    assert "trace persistence failed" not in output.err
+    assert (
+        "does not match"
+        if outcome == "validation"
+        else "cancelled"
+        if outcome == "cancel"
+        else "MCP get_paper_overview failed"
+    ) in output.err
+    saved = read_trace(configured_run[0])
+    assert saved["state"] == "running"
+    assert saved["calls"][0]["state"] == (
+        "started"
+        if failed_write == 3
+        else "returned"
+        if outcome == "validation"
+        else "cancelled"
+        if outcome == "cancel"
+        else "transport_error"
+    )
+
+
+def test_transport_error_records_exception_type_without_message(
+    configured_run, fake_connection, capsys
+):
+    fake_connection.result = RuntimeError("raw credential-bearing exception message")
+    assert probe.main(arguments(configured_run)) == 1
+    trace = read_trace(configured_run[0])
+    assert trace["state"] == "failed"
+    call = trace["calls"][0]
+    assert call["state"] == "transport_error"
+    assert call["exception_type"] == "RuntimeError"
+    assert call["elapsed_seconds"] >= 0
+    assert "raw credential" not in json.dumps(trace)
+    assert "Trace:" in capsys.readouterr().out
+    assert fake_connection.closed
+
+
+def test_success_requires_cleanup(configured_run, fake_connection, monkeypatch, capsys):
+    async def failing_exit(self, *args):
+        self.closed = True
+        assert read_trace(configured_run[0])["state"] == "running"
+        raise RuntimeError("sensitive cleanup message")
+
+    monkeypatch.setattr(type(fake_connection), "__aexit__", failing_exit)
+    assert probe.main(arguments(configured_run)) == 1
+    trace = read_trace(configured_run[0])
+    assert trace["state"] == "failed"
+    assert trace["calls"][0]["state"] == "returned"
+    assert "MCP cleanup failed" in trace["diagnostic"]
+    assert "Connection verified" not in capsys.readouterr().out
+
+
+def test_separate_probe_invocations_preserve_previous_trace(
+    configured_run, fake_connection
+):
+    run_dir, _, _ = configured_run
+    asyncio.run(probe.probe(*configured_run))
+    first_path = next((run_dir / "mcp").glob("probe_connection_*.json"))
+    first_bytes = first_path.read_bytes()
+    asyncio.run(probe.probe(*configured_run))
+    paths = list((run_dir / "mcp").glob("probe_connection_*.json"))
+    assert len(paths) == 2
+    assert first_path.read_bytes() == first_bytes
+    traces = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    assert len({trace["trace_id"] for trace in traces}) == 2
+    assert all(trace["state"] == "succeeded" for trace in traces)
+
+
+def test_credentials_and_images_excluded_without_reducing_evidence(
+    configured_run, fake_connection, monkeypatch
+):
+    run_dir, _, _ = configured_run
+    for key, value in {
+        "SKYNET_API_KEY": "synthetic-api-secret",
+        "ARBITRARY_MODEL_TOKEN": "synthetic-token-secret",
+        "SERVICE_PASSWORD": "synthetic-password-secret",
+    }.items():
+        monkeypatch.setenv(key, value)
+    evidence = "Reported antenna dimensions: 12 x 24 mm."
+    payload = {
+        "content": [
+            {"type": "text", "text": evidence + " synthetic-api-secret"},
+            {
+                "type": "image",
+                "data": "synthetic-image-base64",
+                "mimeType": "image/png",
+            },
+            {
+                "type": "resource",
+                "resource": {
+                    "uri": "asset://figure/1",
+                    "mimeType": "image/png",
+                    "blob": "synthetic-embedded-image",
+                },
+            },
+            {
+                "type": "text",
+                "text": 'Evidence <img src="data:image/png;base64,synthetic-uri-image"> remains.',
+            },
+        ],
+        "structuredContent": {
+            "evidence": evidence,
+            "token": "Bearer synthetic-token-secret",
+            "nested": [{"uri": "data:image/jpeg;base64,synthetic-nested-image"}],
+        },
+        "isError": False,
+        "_meta": {"password": "synthetic-password-secret"},
+    }
+    fake_connection.result = CallToolResult.model_validate(payload)
+    original = fake_connection.result.model_dump(mode="json", by_alias=True)
+    manifest, _, _ = probe.verify_run(run_dir.resolve())
+    fake_connection.trace = probe.ProbeTrace(run_dir, manifest)
+    call_arguments = {
+        "query": evidence,
+        "authorization": "Bearer synthetic-api-secret",
+        "image": "data:image/png;base64,synthetic-argument-image",
+    }
+    result = asyncio.run(fake_connection.call_tool("read_pages", call_arguments))
+    trace = read_trace(run_dir)
+    serialized = json.dumps(trace)
+    for omitted in (
+        "synthetic-api-secret",
+        "synthetic-token-secret",
+        "synthetic-password-secret",
+        "synthetic-image-base64",
+        "synthetic-embedded-image",
+        "synthetic-uri-image",
+        "synthetic-nested-image",
+        "synthetic-argument-image",
+    ):
+        assert omitted not in serialized
+    response = trace["calls"][0]["response"]
+    assert response["structuredContent"]["evidence"] == evidence
+    assert response["content"][0]["text"] == evidence + " [redacted credential]"
+    assert response["content"][1]["data_omitted"] == "image payload"
+    assert response["content"][1]["mimeType"] == "image/png"
+    assert response["content"][2]["resource"]["blob_omitted"] == "image payload"
+    assert response["content"][3]["text"] == (
+        'Evidence <img src="[omitted image data URI]"> remains.'
+    )
+    assert response["isError"] is False
+    assert "_meta" in response
+    assert trace["calls"][0]["arguments"]["query"] == evidence
+    assert result.model_dump(mode="json", by_alias=True) == original
+    assert call_arguments["authorization"] == "Bearer synthetic-api-secret"
+    assert "params" not in trace and "env" not in trace
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "success",
+        "mismatch",
+        "error",
+        "malformed",
+        "transport",
+        "cancel",
+        "startup_cancel",
+        "startup_error",
+    ],
 )
 def test_installed_sdk_closes_scripted_transport(configured_run, monkeypatch, outcome):
     """Exercise SDK context cleanup through public in-memory transport streams."""
@@ -365,13 +709,36 @@ def test_installed_sdk_closes_scripted_transport(configured_run, monkeypatch, ou
                             ]
                         }
                     elif request.method == "tools/call":
+                        assert read_trace(run_dir)["calls"][0]["state"] == "started"
                         state["calls"].append(request.params)
                         if outcome == "cancel":
                             reached.set()
                             await asyncio.Event().wait()
-                        result = overview_result(
-                            "0" * 64 if outcome == "mismatch" else digest
-                        ).model_dump(mode="json", by_alias=True)
+                        if outcome == "transport":
+                            await replies.send(
+                                SessionMessage(
+                                    JSONRPCError(
+                                        jsonrpc="2.0",
+                                        id=request.id,
+                                        error={
+                                            "code": -32603,
+                                            "message": "sensitive remote error",
+                                        },
+                                    )
+                                )
+                            )
+                            continue
+                        if outcome == "error":
+                            response = CallToolResult(content=[], isError=True)
+                        elif outcome == "malformed":
+                            response = CallToolResult(
+                                content=[TextContent(type="text", text="{bad")]
+                            )
+                        else:
+                            response = overview_result(
+                                "0" * 64 if outcome == "mismatch" else digest
+                            )
+                        result = response.model_dump(mode="json", by_alias=True)
                     else:
                         pytest.fail(f"Unexpected method: {request.method}")
                     await replies.send(
@@ -407,14 +774,38 @@ def test_installed_sdk_closes_scripted_transport(configured_run, monkeypatch, ou
         elif outcome == "mismatch":
             with pytest.raises(probe.ProbeError, match="does not match"):
                 await probe.probe(*configured_run)
+        elif outcome in ("error", "malformed", "transport"):
+            with pytest.raises(probe.ProbeError):
+                await probe.probe(*configured_run)
         else:
             await probe.probe(*configured_run)
 
     asyncio.run(exercise())
     assert state["closed"]
+    trace = read_trace(run_dir)
+    assert trace["state"] == (
+        "succeeded"
+        if outcome == "success"
+        else "cancelled"
+        if "cancel" in outcome
+        else "failed"
+    )
+    assert datetime.fromisoformat(trace["finished_at"]).utcoffset() is not None
     if outcome in ("startup_cancel", "startup_error"):
         assert state["calls"] == []
+        assert trace["calls"] == []
     else:
         assert len(state["calls"]) == 1
         assert state["calls"][0]["name"] == "get_paper_overview"
         assert state["calls"][0]["arguments"] == {}
+        call = trace["calls"][0]
+        assert call["state"] == (
+            "cancelled"
+            if outcome == "cancel"
+            else "mcp_error"
+            if outcome == "error"
+            else "transport_error"
+            if outcome == "transport"
+            else "returned"
+        )
+        assert "sensitive remote error" not in json.dumps(trace)

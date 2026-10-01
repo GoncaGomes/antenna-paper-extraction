@@ -39,7 +39,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-02 - Record MCP calls incrementally
 
-- **Status:** pending
+- **Status:** implemented and tested; owner acceptance pending
 - **Objective:** Make each probe tool exchange inspectable as it occurs.
 - **Narrow scope:** Extend the connection probe with ordered records of
   arguments, identifiers, complete responses, timing and failures. Persist
@@ -48,6 +48,29 @@ generation and general pipeline orchestration are outside this branch's scope.
 - **Acceptance checks:** Ordered, linked records survive partial execution and
   failed calls; persistence occurs before continuation, and credentials/image
   payloads are absent.
+- **Implemented:** The probe creates a fresh
+  `mcp/probe_connection_<unique-id>.json` after local preflight and prints its
+  path. `QuietStdioServer.call_tool` preserves the installed public signature,
+  including `meta`, and atomically saves locally identified, ordered calls
+  before execution and complete aliased responses before returning to identity
+  validation. The existing writer is reused. Trace identity, Europe/Lisbon
+  timestamps, elapsed tool durations and controlled diagnostics distinguish
+  call outcomes from overall success after cleanup. Known credential values
+  from credential-related environment entries and image payloads are excluded;
+  ordinary evidence and response structure remain. Required persistence failures
+  stop execution and retain the last valid trace; diagnostic write failures
+  preserve the original error/cancellation. Run lifecycle files, model behaviour,
+  external server settings and dependencies are unchanged.
+- **Verification (2026-10-01):** Focused scripted tests verify persistence before
+  tool execution and return, extra overview fields, two distinct linked calls,
+  separate invocations, failure/cancellation cleanup through the installed SDK's
+  in-memory transport, initial/call/result/final write failures, last-valid-trace
+  preservation and credential/image exclusions. Manifest/status byte and zero
+  model checks remain. Focused tests: 52 passed, three Windows symlink skips.
+  Full local suite: 333 passed, six symlink skips and the same seven unrelated
+  CLI DPI/scale and conversion temperature baseline failures recorded in MCP-01.
+  Repository lint, format and `git diff --check` passed. No real server, model
+  inference, dependency synchronization or MCP-03 work.
 - **Suggested commit:** `feat(tracing): persist MCP calls and responses incrementally`
 
 ## MCP-03 - Run a narrow sequential agent with model tracing

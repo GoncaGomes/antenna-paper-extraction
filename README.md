@@ -75,14 +75,15 @@ observations must remain distinguishable through source and diagnostic reference
 
 Binding configures and validates the document. Store creation or reuse occurs
 when a tool opens the store; binding itself does not create SQLite. The probe's
-overview call can create or reuse the store below. Other run-relative artefacts
-remain planned:
+overview call can create or reuse the store below, and the probe writes a local
+trace. Image/inspection and architecture artefacts remain planned:
 
 | MCP artefact | Purpose |
 | --- | --- |
 | `mcp/store/<sha256[:16]>/paper.sqlite` | Server document store |
 | `mcp/images/...` | Server image assets |
 | `mcp/inspections/...` | Visual inspection diagnostics |
+| `mcp/probe_connection_<unique-id>.json` | Incremental deterministic connection-probe trace |
 | `architecture/architecture_evidence_report.md` | MCP-derived evidence report |
 | `architecture/architecture_execution.json` | MCP execution and incremental trace |
 
@@ -154,8 +155,27 @@ model credentials are not forwarded and `.env` is not loaded. Session timeout is
 600 seconds, automatic retries are disabled, and the SDK context closes the
 connection on success, failure and cancellation. Exit code 0 means every check
 passed; failures emit controlled diagnostics and return nonzero. There are zero
-model calls or visual requests, no manifest/status changes, and no persistent
-probe trace. The overview may create or reuse
+model calls or visual requests and no manifest/status changes. After local
+preflight succeeds, each invocation creates a separate
+`mcp/probe_connection_<unique-id>.json` and prints its path, including when the
+connection subsequently fails. The trace records run/document identity,
+Europe/Lisbon start/end timestamps, overall state and ordered calls with locally
+generated identifiers, arguments, timing and complete received MCP responses.
+Each call's `started` record is saved atomically before execution; its response
+is saved before returning to overview identity validation. Response fields,
+content blocks and aliases survive, excluding known environment credential
+values, image content data and embedded image data URIs, with explicit omission
+markers. Environments, headers, client configuration and raw exception messages
+are not recorded.
+
+Tool outcomes are separate from overall probe success: a received response can
+still fail identity validation or connection cleanup. Transport errors, MCP
+error responses and cancellation retain diagnostics when persistence is
+possible. Required write failures stop the probe and preserve the last valid
+trace; abrupt interruption can leave a call marked `started`. Overall success
+is saved only after identity checks and connection cleanup pass. This trace is
+limited to the deterministic probe; agent/model tracing remains planned.
+The overview may create or reuse
 `mcp/store/<sha256[:16]>/paper.sqlite`; the probe does not access SQLite directly.
 
 `init-run` accepts `--runs-root` (default `runs/`). Other available options and
