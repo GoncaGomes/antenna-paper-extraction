@@ -1,94 +1,68 @@
 # Repository Instructions for Coding Agents
 
-## Purpose
+These instructions govern software development in this repository. The owner
+is the lead developer and may choose to implement an agreed change directly.
 
-This repository implements an evidence-grounded pipeline that extracts antenna architecture and reported results from one scientific paper at a time.
+## Scope and inspection
 
-Final consumer-facing outputs:
-
-- `antenna_architecture.json`
-- `antenna_results.json`
-
-Intermediate reports, manifests, raw responses, traces, validation reports, and failure records are audit artefacts.
-
-## Sources of truth
-
-Use this authority order:
-
-1. Code and tests merged into `main` define implemented behaviour.
-2. `00_ARCHITECTURE_V3.md` defines the intended architecture and fixed decisions.
-3. `01_IMPLEMENTATION_ROADMAP_V3.md` defines phase scope and completion gates.
-4. Scientific benchmark requirements define acceptance when added.
-5. Chats, old plans, and the V2 repository are supporting context only.
-
-If these sources disagree materially, report the divergence. Do not silently reconcile it or treat planned behaviour as implemented.
-
-## Working model
-
-The repository owner is the lead developer. User implementation is the default whenever the owner chooses to write the code directly. Do not assume that every agreed change should be implemented by the agent.
-
-Before editing:
-
-1. Inspect the current branch, HEAD, working tree, relevant code, tests, and artefacts.
-2. Read the relevant V3 architecture and roadmap sections.
-3. State the current behaviour and the smallest coherent implementation increment.
-4. Identify affected files, tests, acceptance evidence, and material open decisions.
-
-Work on one implementation increment at a time. Keep changes small, coherent, reviewable, and within the current roadmap phase.
-
-Do not create placeholders, speculative abstractions, unused configuration, future adapters, or unrelated refactors.
-
-## Architecture guardrails
-
-Follow `00_ARCHITECTURE_V3.md` and the current phase of `01_IMPLEMENTATION_ROADMAP_V3.md`.
-
-Unless those documents are deliberately revised, do not introduce parallel model execution, RAG or vector databases, automatic retries or fallback/reviewer models, unrestricted tool loops, general agent frameworks, unsupported engineering defaults, or later-phase work.
-
-Deterministic code must remain mechanical. Missing, ambiguous, or unsupported scientific information must remain explicit rather than being converted into plausible facts.
+- Before editing, inspect the actual branch, HEAD, working tree, relevant code,
+  tests and artefacts. Read the applicable parts of [README.md](README.md) and
+  [PLAN.md](PLAN.md).
+- Code and tests define implemented behaviour. Follow the approved design in
+  README and implement one current PLAN task at a time. Report unresolved
+  discrepancies rather than silently reconciling them or presenting plans as
+  implemented features.
+- State current behaviour, the smallest coherent increment, affected files,
+  verification evidence and material open decisions before editing.
+- Keep changes small and reviewable. Preserve unrelated user work and stay
+  within the agreed scope. Do not create placeholders, unused abstractions,
+  speculative configuration or unrelated refactors.
+- Keep the external MCP server in its own repository/environment. Do not copy
+  its source tree here or change it as part of local integration work. Leave
+  read-only synced files under `sources/` untouched, if present.
 
 ## Implementation conventions
 
-- Use Python 3.12 and `uv`.
-- Keep importable code under `src/antenna_paper_extraction`.
-- Use `pathlib` for filesystem paths.
-- Use strict Pydantic models at stable validation boundaries.
-- Keep timestamps timezone-aware. Current run manifests use `Europe/Lisbon`.
-- Preserve established atomic persistence where durable artefacts require it.
-- Keep code, identifiers, comments, commit-message proposals, and implementation prompts in English.
-- Explain project concepts and implementation decisions to the repository owner in European Portuguese.
+- Use Python 3.12 and `uv`; keep importable code under
+  `src/antenna_paper_extraction`.
+- Use `pathlib` and strict Pydantic models at stable validation boundaries.
+- Preserve established atomic persistence for durable artefacts and
+  timezone-aware timestamps; current runs use `Europe/Lisbon`.
+- Explain work and decisions to the owner in European Portuguese. Write code,
+  identifiers, comments, documentation, implementation prompts and suggested
+  commit messages in English.
 
-## Testing
+## Verification and handoff
 
-Add or update tests with the behaviour they verify.
+Add or update tests for changed behaviour. Normal local tests use fake/scripted
+model clients and mocked Docling conversion; they must not contact institutional
+endpoints, perform inference or download weights. Live inference is explicit
+and opt-in.
 
-Use fake or scripted model clients in normal local tests. Default tests must never contact institutional model endpoints. Remote probes must be explicit and opt-in.
-
-Run the relevant repository checks before handoff:
+For implementation changes, run affected tests and the broader local suite,
+plus lint and formatting checks as appropriate:
 
 ```bash
 uv run pytest
 uv run ruff check .
+uv run ruff format --check .
 ```
 
-Run additional checks required by the current `pyproject.toml` or roadmap. Inspect representative generated artefacts when applicable.
+For documentation-only changes, review consistency with executable behaviour,
+check references and run `git diff --check`; do not add documentation-only tests
+or run inference. Inspect representative generated artefacts when relevant.
+
+Before handoff, compare the result with the current PLAN task's acceptance
+checks and review the final diff for unrelated work. Report changed files,
+checks and results, limitations, unresolved decisions and deferred work. Leave
+a local working-tree diff for owner review.
 
 ## Git and GitHub ownership
 
-The repository owner exclusively controls all Git and GitHub state-changing operations.
+The owner exclusively controls all Git/GitHub state-changing operations. Agents
+may use read-only commands such as `git status`, `git diff`, `git log`,
+`git show` and `git branch --show-current`.
 
-Agents may use read-only Git commands such as `git status`, `git diff`, `git log`, `git show`, and `git branch --show-current`.
-
-Agents must not stage files, create or switch branches, commit, pull, push, merge, rebase, create or modify pull requests, tag releases, delete branches, rewrite history, or use destructive cleanup commands.
-
-Preserve unrelated user changes. The normal agent handoff is a tested local working-tree diff for owner review.
-
-## Completion
-
-Before declaring an implementation increment complete:
-
-1. Compare it with the applicable roadmap completion gate.
-2. Inspect the final diff for unrelated or future-phase changes.
-3. Run affected tests, the broader local suite, and lint checks as applicable.
-4. Inspect generated artefacts when relevant.
-5. Report files changed, checks performed, limitations, unresolved decisions, and deferred work.
-6. Leave all Git and GitHub state-changing operations to the repository owner.
+Do not stage files, create or switch branches, commit, pull, push, merge, rebase,
+create or modify pull requests, tag releases, delete branches, rewrite history
+or use destructive cleanup commands.

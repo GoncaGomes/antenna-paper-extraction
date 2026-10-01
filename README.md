@@ -1,317 +1,228 @@
 # Antenna Paper Extraction
 
-Antenna Paper Extraction is a Python project for extracting evidence-grounded
-antenna architecture and reported results from one scientific paper at a time.
-The final consumer-facing outputs will be:
+Evidence-grounded extraction of antenna architecture and reported results from
+one scientific PDF per run. The eventual consumer outputs are
+`antenna_architecture.json` and `antenna_results.json`; neither the current
+workflow nor this architecture experiment generates them.
 
-- `antenna_architecture.json`
-- `antenna_results.json`
+## Current behaviour and comparison baseline
 
-Phases 1, 2, and the accepted Phase 3 scope are complete and merged into `main`.
-The complete extraction pipeline is not implemented. The next development phase
-is Phase 4, Architecture Agent. Recorded validation, accepted limitations, and
-future evaluation are distinguished in the roadmap.
+The implemented extraction path remains the comparison baseline:
 
-## Project status
+1. `init-run` preserves the source bytes under `input/` and records SHA-256
+   document identity in an isolated run.
+2. `render-pages` verifies the preserved PDF and renders every physical page in
+   source order, with page metadata and checksums.
+3. `convert-document` sends all rendered pages to the configured NuExtract3
+   endpoint in sequential batches of up to eight pages, making
+   `ceil(page_count / 8)` calls on success. It requests preservation of tables,
+   equations and captions, then joins successful Markdown batches with two
+   newlines in `document.md` without inserting page markers.
+4. `extract-figures` uses Docling layout inference and Markdown figure labels
+   to associate captions with regions, including conservative same-page caption
+   recovery. PDFium renders crops from the preserved PDF. The figure manifest
+   records provenance, timings and unresolved associations.
+5. `extract-architecture` uses the Agents SDK with the complete Markdown and a
+   minimal figure/page catalog. The agent may request exact assets through
+   `get_visual_assets` once; the same model interprets the returned images.
+   It persists an English Markdown evidence report and execution JSON.
 
-Documentation updated: 2026-09-16.
+Architecture execution requires successful figure extraction, a pending
+`architecture_extraction` phase and no existing `architecture/` directory.
+It uses one model call without asset retrieval, or two calls and one tool
+execution with retrieval, including wholly unavailable asset requests. The
+current limit is two model turns and six requested assets by default; six is a
+configured limit, not measured endpoint capacity. Model and tool execution are
+sequential, retries are disabled, additional asset requests
+are rejected, and SDK tracing is disabled in favour of local execution records.
 
-The available workflow creates an isolated run, preserves and verifies the
-source PDF, renders every page in source order, and converts those rendered
-pages into one Markdown document. A separate post-conversion step detects
-figure regions with Docling, attempts conservative caption recovery, and
-renders figure PNGs from the preserved PDF.
+The scientific prompt focuses on the selected design, source provenance and
+reconstruction-critical detail. Claims use identifiers and `Reported`, `Visual`
+or `Derived` classifications with evidence; uncertainty, conflicts and missing
+information remain explicit. Scientific instructions live in the extraction
+prompt in `architecture_report.py`.
 
-Currently implemented:
+Report structure checks are diagnostic: a non-empty report can be published and
+the phase marked `succeeded` despite structural errors. Operational success
+establishes execution and persistence, not scientific acceptance. Results
+extraction, canonicalization, final consumer JSON generation and general
+pipeline orchestration remain unimplemented and outside this branch's scope.
 
-- Python 3.12 project managed with `uv`
-- Isolated run creation for one PDF at a time
-- Source PDF preservation and SHA-256 verification
-- Strict run, lifecycle, and pages manifests
-- Ordered PNG page rendering at 170 DPI by default
-- Sequential NuExtract3 conversion in batches of up to eight pages
-- OpenAI-compatible response handling
-- Per-batch raw responses and traces
-- Post-conversion figure extraction with label-based caption association
-- Conservative same-page geometric recovery of missing caption associations
-- `figures/manifest.json` with provenance, timings, and unresolved entries
-- `figure_extraction` lifecycle support
-- Minimal visual catalog built from the existing figure and page manifests
-- Deterministic resolution of exact figure/page IDs with explicit availability
-- Importable bounded multimodal inspection using the OpenAI Agents SDK
-- Institutional multimodal protocol probe, with owner-reported successful runs
-- Structured phase status and failure records
-- Timezone-aware lifecycle timestamps using `Europe/Lisbon`
-- Atomic JSON and binary persistence
-- Local tests and Ruff checks
+## Approved MCP experiment - not yet implemented
 
-Not yet implemented:
+The `exp/architecture-mcp` branch will compare iterative MCP evidence acquisition
+with the existing extraction path. Its implementation tasks are in
+[PLAN.md](PLAN.md).
 
-- Automatic page fallback and scientific-agent response persistence
-- Architecture and results extraction agents
-- Canonicalization and final JSON generation
-- An end-to-end pipeline command
+- Reuse `init-run` to preserve one PDF and establish run identity, then launch
+  an external MCP server through stdio, bound to that preserved PDF.
+- Keep the server in its own repository and environment. Server-derived data
+  belongs under `<run_dir>/mcp/`; its source tree is not copied here.
+- Let the architecture agent acquire evidence iteratively through all six MCP
+  tools using the Agents SDK. Use a finite, configurable turn budget, initially
+  proposed as 80, with sequential model/tool execution and no automatic retries.
+- Allow explicitly requested visual inspection inside the MCP. Persist tool
+  and model traces incrementally and produce the existing architecture evidence
+  report, retaining the baseline path for comparison.
 
-## Intended pipeline
+The current external MCP interface has exactly six tools:
+`get_paper_overview`, `read_pages`, `read_section`, `search_paper`, `list_assets`
+and `get_asset`. `get_asset(asset_id, question=...)` requests visual inspection;
+question-free asset access is distinct from an inspection request. `page:N`
+addresses a physical PDF page. Original paper content and learned visual
+observations must remain distinguishable through source and diagnostic references.
 
-The architecture defines this sequential flow:
+Binding configures and validates the document. Store creation or reuse occurs
+when a tool opens the store; binding itself does not create SQLite. Planned
+run-relative artefacts are:
 
-1. Initialize a traceable run and render the PDF pages in source order.
-2. Convert the ordered page sequence into Markdown with NuExtract3.
-3. Extract figures using converted Markdown captions and the preserved PDF.
-4. Build a minimal visual catalog and inspect exact figure/page IDs through
-   one tool execution when the model requests assets (implemented and merged).
-5. Produce independent, sequential architecture and results reports (planned).
-6. Canonicalize the grounded claims into a shallow validated contract (planned).
-7. Split the validated response into the two final JSON documents (planned).
+| Planned MCP artefact | Purpose |
+| --- | --- |
+| `mcp/store/<sha256[:16]>/paper.sqlite` | Server document store |
+| `mcp/images/...` | Server image assets |
+| `mcp/inspections/...` | Visual inspection diagnostics |
+| `architecture/architecture_evidence_report.md` | MCP-derived evidence report |
+| `architecture/architecture_execution.json` | MCP execution and incremental trace |
 
-Missing or ambiguous scientific information must remain explicit. The
-pipeline must not replace it with plausible engineering defaults.
+The architecture filenames already exist in the baseline; producing them through
+MCP is planned. There is currently no local MCP connection probe, execution path,
+CLI command or MCP configuration surface. Server launch/model settings and the
+turn-budget configuration will be documented when implemented. Tool calls,
+principal-model requests and visual-model requests will be counted separately;
+a `get_asset` call or supplied question does not prove a visual-model request
+occurred, particularly for unavailable evidence or configuration failures.
 
-## Setup
+## Setup and current configuration
 
-Requirements:
-
-- Python 3.12
-- [`uv`](https://docs.astral.sh/uv/)
-
-Create the environment and install the project dependencies:
+Use Python 3.12 and `uv`:
 
 ```bash
 uv sync
-```
-
-Verify that the command-line interface is available:
-
-```bash
 uv run antenna-extract --help
 ```
 
-## Document-conversion configuration
+`convert-document` and `extract-architecture` load `.env` from the current
+working directory; existing process environment values take precedence.
 
-The `convert-document` command reads endpoint configuration from the process
-environment. For local development, it also loads `.env` from the current
-working directory. Existing process environment values take precedence over
-values in `.env`.
+| Environment variable | Used by |
+| --- | --- |
+| `SKYNET_BASE_URL` | Both commands: OpenAI-compatible endpoint base URL |
+| `SKYNET_API_KEY` | Both commands: endpoint credential |
+| `DOCUMENT_EXTRACTOR_MODEL` | Conversion: deployed NuExtract3 identifier |
+| `DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS` | Conversion: positive timeout in seconds |
+| `ARCHITECTURE_AGENT_MODEL` | Architecture: deployed model identifier |
+| `ARCHITECTURE_AGENT_TIMEOUT_SECONDS` | Architecture: positive finite timeout in seconds |
 
-The following variables are required:
+Each command requires all its listed variables. Keep credentials local; do not
+commit `.env`, PDFs or large run artefacts. `extract-figures` requires no
+institutional endpoint configuration, but Docling performs local inference and
+may download model weights on first use.
 
-- `SKYNET_BASE_URL`: base URL of the OpenAI-compatible endpoint
-- `SKYNET_API_KEY`: endpoint credential
-- `DOCUMENT_EXTRACTOR_MODEL`: deployed NuExtract3 model identifier
-- `DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS`: positive request timeout in seconds
+## Current usage
 
-A local `.env` can contain the non-secret settings below. It must also define
-`SKYNET_API_KEY` locally, or that variable must exist in the process
-environment. Never commit the API key or include its value in documentation,
-logs, or shared examples.
-
-```dotenv
-SKYNET_BASE_URL=https://your-endpoint.example/v1
-DOCUMENT_EXTRACTOR_MODEL=your-deployed-model-id
-DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS=600
-```
-
-## Usage
-
-Create a traceable run from a local PDF:
+Run the baseline steps explicitly, replacing `runs/run_<id>` with the directory
+printed by `init-run`. Quote paths containing spaces:
 
 ```bash
-uv run antenna-extract init-run path/to/paper.pdf
+uv run antenna-extract init-run "path/to/paper.pdf"
+uv run antenna-extract render-pages "runs/run_<id>"
+uv run antenna-extract convert-document "runs/run_<id>"
+uv run antenna-extract extract-figures "runs/run_<id>"
+uv run antenna-extract extract-architecture "runs/run_<id>"
 ```
 
-Run artefacts are written under `runs/` by default. Use `--runs-root` to select
-another parent directory:
+`init-run` accepts `--runs-root` (default `runs/`). Other available options and
+current defaults are:
 
-```bash
-uv run antenna-extract init-run path/to/paper.pdf --runs-root path/to/runs
-```
+| Command option | Effective CLI default | Importable function default |
+| --- | ---: | ---: |
+| `render-pages --dpi` | 300 | 170 |
+| `extract-figures --scale` | 4.0 | 3.0 |
+| `extract-figures --margin-pt` | 2.0 | 2.0 |
+| `extract-architecture --max-assets` | 6 | 6 |
 
-Render every page of an existing run as PNG:
+`--scale` controls PDFium crop rendering, not Docling settings. The CLI help for
+`--scale` still says 3.0, and default assertions in `tests/test_cli.py` still
+expect 170 DPI and scale 3.0. These code/test discrepancies need a separate
+implementation review. Use explicit `--dpi 170` and `--scale 3.0` when comparing
+with runs made using those settings; these are not universally validated defaults.
 
-```bash
-uv run antenna-extract render-pages runs/run_<id>
-```
+Visual inspection is also importable through `run_visual_inspection` in
+`visual_inspection.py`, using `InspectionChatCompletionsModel`. Its caller owns
+the client and must disable retries; the result contains final text, requested
+asset IDs and counts. Persistence belongs to the architecture caller.
+`scripts/probe_multimodal.py` is a separate opt-in synthetic protocol probe using
+`SKYNET_BASE_URL`, `SKYNET_API_KEY` and `ARCHITECTURE_AUTHOR_MODEL`; the latter is
+not the architecture CLI setting. Owner-reported successful probes for
+`gemma-4-26b-a4b` and `qwen3.8-27b` establish protocol compatibility only, not
+scientific quality or production model selection.
 
-Page rendering uses 170 DPI by default. Override it with `--dpi` when needed:
+## Audit artefacts and failures
 
-```bash
-uv run antenna-extract render-pages runs/run_<id> --dpi 300
-```
-
-Convert the rendered pages to Markdown:
-
-```bash
-uv run antenna-extract convert-document runs/run_<id>
-```
-
-The command requires successful page rendering. It validates the run, status,
-and pages manifest identities before contacting the endpoint.
-
-Extract figures after document conversion has succeeded:
-
-```bash
-uv run antenna-extract extract-figures runs/run_<id>
-uv run antenna-extract extract-figures runs/run_<id> --scale 3.0 --margin-pt 2.0
-```
-
-Extraction reads `document_conversion/document.md` and the preserved PDF under
-`input/`. It reads `<figcaption>` content and associates numeric figure labels
-with Docling candidates. PDFium renders each required page once for cropping.
-`--scale` controls PDFium rendering, not Docling settings. The defaults are
-scale 3.0 and a 2-point margin bounded by the page, with limited manual evidence.
-
-Docling performs local model inference and may download model weights on first
-use. This command does not require institutional model endpoint configuration.
-Docling image generation is disabled; PDFium produces the final PNGs.
-
-Visual inspection is an importable capability in
-`antenna_paper_extraction.visual_inspection`, not a CLI command:
-
-```python
-from antenna_paper_extraction.visual_inspection import run_visual_inspection
-
-await run_visual_inspection(
-    run_dir=run_dir, model=model, instructions=instructions, max_assets=6
-)
-```
-
-`run_visual_inspection` accepts an `OpenAIChatCompletionsModel`; its caller owns
-the client and must disable automatic retries. It reads the complete
-`document_conversion/document.md` and builds the catalog from
-`figures/manifest.json` and `pages/pages.json`. Catalog figures contain only
-`figure_id`, `status`, and nullable `page_id`; `pages` lists declared page IDs.
-The default `max_assets=6` is a configured count limit, not measured endpoint
-capacity. No inspection output directory is generated.
-
-The model decides whether to request assets. A direct answer uses one model
-call and zero tool executions. A figure/page request uses two calls and one
-tool execution, including when all requested assets are unavailable. Further
-tool requests are rejected. The same model interprets the returned images.
-Automatic page fallback is deferred; a declared page may be requested explicitly
-alongside figures, even when a figure crop exists.
-
-The in-memory result contains `final_text`, `requested_asset_ids`,
-`model_calls`, and `tool_executions`. Response persistence and destinations
-belong to the later scientific agents: the intended deliverable is a JSON
-containing the complete final answer and model responses, including tool calls.
-Phase 3 adds no HTTP logging or persistent tracing subsystem.
-
-`scripts/probe_multimodal.py` is the separate opt-in institutional probe. The
-owner reported successful protocol checks for `gemma-4-26b-a4b` and
-`qwen3.8-27b`; these do not establish scientific extraction quality or select
-a production model. See roadmap section 11.7 for the evidence boundary.
-
-## Run artefacts
-
-After document conversion and figure extraction complete, the run contains:
+A completed baseline run contains:
 
 ```text
 run_<id>/
-├── manifest.json
-├── status.json
-├── input/
-│   └── <original-filename>.pdf
-├── pages/
-│   ├── pages.json
-│   ├── page_0001.png
-│   └── ...
-├── document_conversion/
-│   ├── document.md
-│   ├── nuextract3_raw_response_batch_0001.json
-│   ├── nuextract3_trace_batch_0001.json
-│   └── ...
-└── figures/
-    ├── manifest.json
-    └── figure_<number>.png
+  manifest.json
+  status.json
+  input/<original-filename>.pdf
+  pages/pages.json
+  pages/page_0001.png ...
+  document_conversion/document.md
+  document_conversion/nuextract3_raw_response_batch_0001.json ...
+  document_conversion/nuextract3_trace_batch_0001.json ...
+  figures/manifest.json
+  figures/figure_<number>.png ...
+  architecture/architecture_evidence_report.md
+  architecture/architecture_execution.json
 ```
 
-`manifest.json` records stable run and source-document identity. `status.json`
-records phase state, timestamps, and inspectable failures. `pages/pages.json`
-records rendering settings and the ordered page assets with dimensions, sizes,
-and checksums.
+The strict manifests record run/document identity, ordered page assets and phase
+states (`pending`, `running`, `succeeded`, `failed`). Lifecycle timestamps use
+`Europe/Lisbon`; durable JSON and binary writes use atomic replacement.
 
-The `document_conversion` directory contains the combined Markdown and the
-diagnostic artefacts for each batch. Batch numbers are one-based and
-zero-padded to four digits.
+Conversion writes each received raw response before parsing, then a trace with
+request settings, HTTP status, finish reason, usage when available and model
+latency. It stops at the first failed batch; final Markdown is written only after
+all batches parse successfully. Earlier diagnostics survive; transport failures
+may produce no raw response.
 
-`figures/manifest.json` records source identity, settings, timings, caption
-associations, original candidates, and unresolved reasons. PNGs are written
-only for renderable associations. A figure ID or label does not guarantee a
-materialized PNG; `relative_path` can be null.
+Architecture execution atomically saves each event before continuing, including
+received model responses before SDK interpretation, linked tool requests and
+availability results without image payloads. Its JSON also records instructions,
+configuration, counts, total duration, final text, structural diagnostics and
+errors. Current model-request events record the occurrence, not complete request
+bodies or per-event timing; richer MCP tracing is planned. Truncation or execution
+failure preserves prior events without publishing a report. If finalization
+fails, the report created by that execution is removed while diagnostics remain.
+Existing conversion, figure and architecture outputs are protected against silent
+replacement. No automatic retry or rerun/reset command is available.
 
-## Batching and failure behaviour
+## Material limitations
 
-Document conversion processes the complete ordered page sequence. It applies
-no relevance filter before conversion. Consecutive batches contain at most
-eight pages and are sent sequentially. For `page_count` rendered pages, the
-number of NuExtract3 calls is:
+- Markdown has no reliable page markers, and batch boundaries need review;
+  physical page identity remains in `pages/pages.json`.
+- Figure-label uniqueness does not establish semantic caption equivalence or
+  crop quality. Docling may merge neighbouring content or split compound
+  figures. A figure ID can have no PNG; manifest availability does not guarantee
+  readability. Historical manual evidence includes one owner-confirmed caption
+  recovery, not universal layout validation.
+- Baseline asset resolution validates IDs, count limits and path containment,
+  including symlinks, but not image contents, additional visual-asset hashes or
+  byte-payload limits. These extra checks are outside its accepted scope.
+  There is no automatic page substitution; declared pages can be requested.
+- Scientific completeness, endpoint payload capacity and end-to-end performance
+  are not established by structural checks, protocol probes or preprocessing
+  timings. The MCP pilot and six-case comparison remain pending.
 
-```text
-B = ceil(page_count / 8)
-```
+## Development
 
-Every page is processed exactly once and in source order. The implementation
-reads Markdown from `choices[0].message.content` in the OpenAI-compatible
-response. Successful batch Markdown is joined mechanically with two newline
-characters between batches. The conversion adds no page ID markers.
+[AGENTS.md](AGENTS.md) governs coding-agent work; [PLAN.md](PLAN.md) defines this
+branch's implementation increments. Code and tests define implemented behaviour;
+README describes the approved direction. Report discrepancies explicitly rather
+than treating planned behaviour as available.
 
-For each response received, the raw response is written before its Markdown is
-parsed. A trace is written only after parsing succeeds. The trace records the
-requested model, request settings, HTTP status, `finish_reason`, usage when
-available, and measured model latency. The final `document.md` is written only
-after every batch succeeds. Conversion stops at the first failed batch and the
-lifecycle status becomes `failed`. A transport failure can occur before any
-raw response exists.
-
-There are no retries, fallbacks, parallel batch calls, or configurable
-`max_tokens`. Fixed-size batching replaced one request per document after
-larger papers reached the endpoint context limit. Reducing the default
-resolution from 200 DPI to 170 DPI reduced the input size but did not solve
-every larger-paper failure. Sequential batches completed larger papers that
-had previously ended with `finish_reason="length"`.
-
-Figure extraction requires successful document conversion, a `pending`
-`figure_extraction` state, and no existing `figures/` output. These preflight
-rejections leave lifecycle state unchanged. Exceptions after the phase starts
-record a failure, preserving existing partial artefacts. There is no automatic
-retry or implemented rerun/reset command.
-
-A completed extraction may contain unresolved entries, even without any PNGs.
-`succeeded` means the operation and manifest persistence completed, not that
-every crop has passed visual review.
-
-## Current limitations
-
-These accepted limitations and future evaluation items do not block closure of
-Phase 3. They do not imply universal visual, scientific, or performance validation.
-
-- `document.md` has no reliable page markers. Page identity remains in
-  `pages/pages.json`.
-- Batch boundaries are mechanical and may need manual review.
-- Label matching checks uniqueness, not semantic caption equivalence or crop
-  quality. Manual visual review remains necessary.
-- Docling can merge regions containing neighbouring figures, text, or tables,
-  or split a compound figure into uncaptioned subfigures. The implementation
-  does not automatically repair these layouts or reject all problematic crops.
-- The owner confirmed one real recovery case; this is not universal layout
-  validation. Detailed evidence and limitations are recorded in the roadmap.
-- Catalog availability reflects manifest declarations, not file readability or
-  crop quality. Resolution returns explicit reasons for unavailable assets.
-- Automatic page substitution is not implemented. Unknown figure/page
-  relationships remain unresolved.
-- The resolver checks identifiers, count limits, and path containment; it does
-  not validate image contents. Additional visual-asset hash verification and
-  byte-payload limits are deliberately excluded from the accepted resolver
-  scope, not pending requirements. Existing source/page hashes are unchanged.
-- Endpoint payload capacity, inspection latency, and end-to-end performance
-  remain unmeasured. The existing extraction timings are not a full benchmark.
-- Architecture extraction, results extraction, canonicalization, and final
-  JSON generation are not implemented.
-
-## Development checks
-
-Run the complete local verification set:
+For implementation changes, the local verification commands are:
 
 ```bash
 uv run pytest
@@ -319,16 +230,7 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-Normal tests mock Docling conversion and remote model clients. They must not
-trigger model inference, endpoint calls, or model-weight downloads.
-
-## Repository guidance
-
-The project sources of truth are, in order:
-
-1. Code and tests merged into `main` for implemented behaviour
-2. [`00_ARCHITECTURE_V3.md`](00_ARCHITECTURE_V3.md) for intended architecture
-3. [`01_IMPLEMENTATION_ROADMAP_V3.md`](01_IMPLEMENTATION_ROADMAP_V3.md) for phase scope and completion gates
-4. Scientific benchmark requirements for acceptance, once introduced
-
-Development rules for coding agents are defined in [`AGENTS.md`](AGENTS.md).
+Normal tests use fake/scripted clients and mocked Docling conversion; they must
+not contact model endpoints, perform inference or download weights. Live probes
+and scientific reviews are explicit. Documentation-only changes require diff,
+reference and executable-behaviour consistency checks, including `git diff --check`.
