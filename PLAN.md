@@ -8,7 +8,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-01 - Connect a preserved run to the external MCP
 
-- **Status:** implemented and tested; owner acceptance pending
+- **Status:** implemented and tested;
 - **Objective:** Verify a run-bound PDF server connection without LLM calls.
 - **Narrow scope:** Add a small explicitly invoked connection probe with a
   current caller. Read and verify the preserved PDF, launch the configured
@@ -39,7 +39,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-02 - Record MCP calls incrementally
 
-- **Status:** implemented and tested; owner acceptance pending
+- **Status:** implemented and tested;
 - **Objective:** Make each probe tool exchange inspectable as it occurs.
 - **Narrow scope:** Extend the connection probe with ordered records of
   arguments, identifiers, complete responses, timing and failures. Persist
@@ -75,7 +75,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-03 - Run a narrow sequential agent with model tracing
 
-- **Status:** pending
+- **Status:** implemented and tested; owner acceptance pending
 - **Objective:** Exercise iterative acquisition on a small geometry-evidence task.
 - **Narrow scope:** Extend the probe using the Agents SDK, expose all six tools,
   enforce sequential execution, disable automatic retries and apply configurable
@@ -85,6 +85,44 @@ generation and general pipeline orchestration are outside this branch's scope.
 - **Acceptance checks:** Scripted clients exercise multiple tool rounds, budget
   exhaustion and failures; traces survive, execution remains sequential and
   retries are absent. A live probe is explicit.
+- **Implemented:** `--agent-model` explicitly selects the narrow geometry task;
+  `--max-turns` is a positive integer, default 8. Initialized runs need no other
+  baseline artefacts. The existing PDF preflight, recorded stdio server and
+  atomic writer are reused; shared trace code now lives in `mcp_agent.py`.
+  Agent mode loads `.env` before credential redaction, preserving process
+  precedence, requires SKYNET endpoint settings and forwards only explicit
+  visual settings. Connection-only mode retains zero model calls and its
+  credential-free child environment. OpenAI-compatible Chat Completions uses
+  600-second client/session timeouts, zero client/SDK/MCP retries, disabled SDK
+  tracing and both provider parallel-call disabling and SDK tool concurrency one.
+  The public `chat.completions.create` adapter, including `with_options` clones,
+  saves effective requests before dispatch and complete raw responses before
+  normalization/validation. Fresh `probe_agent_<unique-id>.json` traces retain
+  ordered events, linked local model/MCP IDs and SDK tool-call IDs, timings,
+  usage/coverage, final text and termination after cleanup. Truncation, budget
+  exhaustion and operational failures retain evidence without success; required
+  write failures stop continuation and preserve the last valid trace. Headers,
+  known credentials and image payloads are excluded. Tool errors remain distinct
+  from an honest final answer reporting insufficient evidence. Manifest/status
+  bytes, the external MCP repository and MCP-04 scope remain unchanged.
+- **Verification (2026-10-01):** Installed Agents SDK 0.22.2 and OpenAI 3.6.0
+  boundary tests use scripted Chat Completions and in-memory MCP transport with
+  the real Runner. They cover multiple rounds, all six advertised tools, multiple
+  same-response tool requests executing sequentially, effective pre-dispatch
+  requests, raw responses before tool execution/interpretation, truncation,
+  budget exhaustion, model/transport errors, cancellation and cleanup, required
+  write failures preventing subsequent tools/models, `.env` redaction and
+  precedence, missing visual configuration, trace preservation and unchanged
+  lifecycle bytes. Focused suite: 77 passed, three Windows symlink skips. Full
+  local suite: 363 passed, six symlink skips and the same seven unrelated CLI
+  DPI/scale and conversion temperature baseline failures. Lint and formatting
+  passed. `git diff --check` reports only two pre-existing trailing spaces in the
+  owner's MCP-01/MCP-02 status edits, preserved as requested; MCP-03 changes pass
+  whitespace checks. No live inference or dependency synchronization was run.
+- **Owner-requested test alignment (2026-10-01):** Updated CLI and conversion
+  test expectations to the existing 300 DPI, scale 4.0 and temperature 0.2 defaults.
+  Focused tests: 44 passed. Full local suite: 370 passed, six symlink skips,
+  no failures. Runtime defaults are unchanged; lint and formatting passed.
 - **Suggested commit:** `feat(mcp): run a sequential evidence acquisition agent`
 
 ## MCP-04 - Link visual observations to diagnostics and counts

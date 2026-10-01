@@ -52,8 +52,8 @@ pipeline orchestration remain unimplemented and outside this branch's scope.
 
 The `exp/architecture-mcp` branch will compare iterative MCP evidence acquisition
 with the existing extraction path. Its implementation tasks are in
-[PLAN.md](PLAN.md). The deterministic connection probe is implemented; agent
-execution and architecture reports through MCP remain planned.
+[PLAN.md](PLAN.md). The deterministic connection probe and a narrow geometry
+evidence agent are implemented; architecture reports through MCP remain planned.
 
 - Reuse `init-run` to preserve one PDF and establish run identity, then launch
   an external MCP server through stdio, bound to that preserved PDF.
@@ -76,7 +76,8 @@ observations must remain distinguishable through source and diagnostic reference
 Binding configures and validates the document. Store creation or reuse occurs
 when a tool opens the store; binding itself does not create SQLite. The probe's
 overview call can create or reuse the store below, and the probe writes a local
-trace. Image/inspection and architecture artefacts remain planned:
+trace. Agent tool requests may also produce server image/inspection artefacts;
+MCP architecture artefacts remain planned:
 
 | MCP artefact | Purpose |
 | --- | --- |
@@ -84,14 +85,14 @@ trace. Image/inspection and architecture artefacts remain planned:
 | `mcp/images/...` | Server image assets |
 | `mcp/inspections/...` | Visual inspection diagnostics |
 | `mcp/probe_connection_<unique-id>.json` | Incremental deterministic connection-probe trace |
+| `mcp/probe_agent_<unique-id>.json` | Narrow geometry agent: ordered model/MCP trace and final text |
 | `architecture/architecture_evidence_report.md` | MCP-derived evidence report |
 | `architecture/architecture_execution.json` | MCP execution and incremental trace |
 
 The architecture filenames already exist in the baseline; producing them through
-MCP is planned. The connection-only probe accepts explicit server executable and
-working-directory paths; there is no MCP architecture execution path or production
-CLI command yet. Model settings and the turn-budget configuration will be
-documented when implemented. Tool calls,
+MCP is planned. The probe accepts explicit server executable and working-directory
+paths and optional agent mode; there is no MCP architecture execution path or
+production CLI command yet. Tool calls,
 principal-model requests and visual-model requests will be counted separately;
 a `get_asset` call or supplied question does not prove a visual-model request
 occurred, particularly for unavailable evidence or configuration failures.
@@ -105,13 +106,14 @@ uv sync
 uv run antenna-extract --help
 ```
 
-`convert-document` and `extract-architecture` load `.env` from the current
-working directory; existing process environment values take precedence.
+`convert-document`, `extract-architecture` and the probe's agent mode load `.env`
+from the current working directory; existing process environment values take
+precedence.
 
 | Environment variable | Used by |
 | --- | --- |
-| `SKYNET_BASE_URL` | Both commands: OpenAI-compatible endpoint base URL |
-| `SKYNET_API_KEY` | Both commands: endpoint credential |
+| `SKYNET_BASE_URL` | Conversion, architecture and agent probe: OpenAI-compatible endpoint base URL |
+| `SKYNET_API_KEY` | Conversion, architecture and agent probe: endpoint credential |
 | `DOCUMENT_EXTRACTOR_MODEL` | Conversion: deployed NuExtract3 identifier |
 | `DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS` | Conversion: positive timeout in seconds |
 | `ARCHITECTURE_AGENT_MODEL` | Architecture: deployed model identifier |
@@ -173,10 +175,69 @@ still fail identity validation or connection cleanup. Transport errors, MCP
 error responses and cancellation retain diagnostics when persistence is
 possible. Required write failures stop the probe and preserve the last valid
 trace; abrupt interruption can leave a call marked `started`. Overall success
-is saved only after identity checks and connection cleanup pass. This trace is
-limited to the deterministic probe; agent/model tracing remains planned.
+is saved only after identity checks and connection cleanup pass.
 The overview may create or reuse
 `mcp/store/<sha256[:16]>/paper.sqlite`; the probe does not access SQLite directly.
+
+To run the small geometry evidence task on an initialized run, explicitly select
+the principal model. The agent does not need rendered pages, converted Markdown
+or extracted figures. It chooses its own sequence from all six tools and may ask
+targeted visual questions or explicitly inspect a source page (`page:N`). It
+describes one example, with dimensions, associations, uncertainties and source
+references; insufficient evidence is a valid honest final answer.
+
+```powershell
+$env:SKYNET_BASE_URL = "https://your-endpoint/v1"
+$env:SKYNET_API_KEY = "your-local-credential"
+$agentModel = "your-explicit-deployed-model"
+uv run --no-sync python scripts/probe_mcp_connection.py `
+  --run-dir "C:\dev\antenna-paper-extraction\runs\run_<id>" `
+  --mcp-executable "C:\dev\reviewer-mcp\.venv\Scripts\mcp-pdf-ingestion.exe" `
+  --mcp-cwd "C:\dev\reviewer-mcp" `
+  --agent-model $agentModel `
+  --max-turns 8
+```
+
+Only agent mode loads the current directory's `.env`, with process values taking
+precedence, before constructing the trace. It requires `SKYNET_BASE_URL` and
+`SKYNET_API_KEY`; no principal model is inferred from environment variables.
+`--agent-model` must be nonblank and `--max-turns` a positive integer (default 8).
+For optional visual inspection, explicitly set `VISUAL_INSPECTION_MODEL` and
+`VISUAL_INSPECTION_TIMEOUT_SECONDS`, in the process or `.env`. Agent mode forwards
+only these four endpoint/visual settings in addition to the existing launch
+environment. Missing visual configuration remains a server-reported limitation
+if inspection is requested; no visual model is selected automatically.
+
+The principal model uses OpenAI-compatible Chat Completions with a 600-second
+timeout. Model/client and MCP retries are disabled. SDK tool concurrency is one,
+including when a model returns multiple tool calls, and `parallel_tool_calls` is
+false. SDK tracing is disabled. No live inference is part of local tests.
+
+Each invocation prints a fresh `mcp/probe_agent_<unique-id>.json` path and preserves
+earlier traces. The shared atomic writer persists effective messages/instructions,
+advertised tool schemas and request settings before dispatch, and complete raw
+Chat Completions responses before SDK normalization or tool execution. Records
+include local model request IDs, ordered events, raw tool-call IDs/arguments,
+finish reasons, usage when available and Lisbon timestamps/timing. MCP records
+link the local request ID and SDK tool-call ID to their separate local call ID;
+the preliminary identity-check overview has no model/tool-call ID. Credentials,
+headers and image payloads are omitted from both model and tool records.
+
+`state=succeeded` with `termination_reason=final_answer` means final text was saved
+and client/session cleanup completed. `state=failed` with `max_turns` means the
+budget was exhausted; `model_failure`, `tool_failure` or `cleanup_failure` identify
+other execution failures. Cancellation records `state=cancelled` and
+`termination_reason=cancellation`. Counts distinguish principal model requests,
+received responses and MCP calls (including the preliminary overview). Raw usage
+is retained per response; totals include only responses reporting usage and state
+their coverage. Tool outcomes remain separate from execution state, and visual
+inference counts/diagnostic linking remain MCP-04 work. Required persistence
+failure stops continuation and returns nonzero; because the writer is unavailable,
+the last valid trace can retain `state=running`, a `started` record or final text
+without a terminal state. The controlled CLI diagnostic identifies persistence
+failure. Truncated/unusable responses are preserved and fail explicitly. Exit
+codes are 0 for normal completion, 1 for failure and 130 for cancellation. Neither
+probe mode changes manifest/status files or produces an architecture report.
 
 `init-run` accepts `--runs-root` (default `runs/`). Other available options and
 current defaults are:
@@ -189,9 +250,9 @@ current defaults are:
 | `extract-architecture --max-assets` | 6 | 6 |
 
 `--scale` controls PDFium crop rendering, not Docling settings. The CLI help for
-`--scale` still says 3.0, and default assertions in `tests/test_cli.py` still
-expect 170 DPI and scale 3.0. These code/test discrepancies need a separate
-implementation review. Use explicit `--dpi 170` and `--scale 3.0` when comparing
+`--scale` still says 3.0 and needs a separate correction. Tests now expect the
+current CLI defaults of 300 DPI and scale 4.0, and conversion temperature 0.2.
+Use explicit `--dpi 170` and `--scale 3.0` when comparing
 with runs made using those settings; these are not universally validated defaults.
 
 Visual inspection is also importable through `run_visual_inspection` in
@@ -239,8 +300,8 @@ received model responses before SDK interpretation, linked tool requests and
 availability results without image payloads. Its JSON also records instructions,
 configuration, counts, total duration, final text, structural diagnostics and
 errors. Current model-request events record the occurrence, not complete request
-bodies or per-event timing; richer MCP tracing is planned. Truncation or execution
-failure preserves prior events without publishing a report. If finalization
+bodies or per-event timing; the MCP agent probe records those separately.
+Truncation or execution failure preserves prior events without publishing a report. If finalization
 fails, the report created by that execution is removed while diagnostics remain.
 Existing conversion, figure and architecture outputs are protected against silent
 replacement. No automatic retry or rerun/reset command is available.

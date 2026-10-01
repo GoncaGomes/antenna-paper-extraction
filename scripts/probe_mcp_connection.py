@@ -1,4 +1,4 @@
-"""Explicit deterministic MCP connection check for one preserved extraction run."""
+"""Explicit connection or narrow evidence-agent probe for one preserved run."""
 
 import argparse
 import asyncio
@@ -6,23 +6,28 @@ import copy
 import json
 import logging
 import os
-import re
 import sys
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, TextIO
 from uuid import uuid4
 
+from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from agents.mcp import MCPServerStdio
+from dotenv import load_dotenv
 from mcp import stdio_client
 from mcp.client.stdio import get_default_environment
 from mcp.types import CallToolResult
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from antenna_paper_extraction.persistence import write_json
+from antenna_paper_extraction.mcp_agent import (
+    ProbeError,
+    ProbePersistenceError,
+    ProbeTrace,
+    run_evidence_agent,
+    timestamp,
+)
 from antenna_paper_extraction.runs import (
-    PORTUGAL_TIMEZONE,
     RunManifest,
     load_run_status,
     sha256_file,
@@ -39,94 +44,6 @@ EXPECTED_TOOLS = frozenset(
     }
 )
 SESSION_TIMEOUT_SECONDS = 600
-
-
-class ProbeError(ValueError):
-    """A controlled diagnostic safe to display without external error bodies."""
-
-
-class ProbePersistenceError(ProbeError):
-    """A required trace write failed; execution must stop."""
-
-
-def timestamp() -> str:
-    return datetime.now(PORTUGAL_TIMEZONE).isoformat()
-
-
-class ProbeTrace:
-    """Small local trace, committed only through the existing atomic writer."""
-
-    def __init__(self, run_dir: Path, manifest: RunManifest):
-        trace_id = uuid4().hex
-        self.path = run_dir / "mcp" / f"probe_connection_{trace_id}.json"
-        self.data: dict[str, Any] = {
-            "trace_id": trace_id,
-            "run_id": manifest.run_id,
-            "document_id": manifest.document_id,
-            "started_at": timestamp(),
-            "finished_at": None,
-            "state": "running",
-            "calls": [],
-        }
-        self.persistence_failed = False
-        credential_name = re.compile(
-            r"(?:^|_)(?:API_KEY|KEY|TOKEN|PASSWORD|SECRET|CREDENTIALS?|AUTH)(?:_|$)",
-            re.IGNORECASE,
-        )
-        self.credential_values = sorted(
-            {
-                value
-                for key, value in os.environ.items()
-                if value and credential_name.search(key)
-            },
-            key=len,
-            reverse=True,
-        )
-        self.save(self.data)
-
-    def sanitize(self, value: Any) -> Any:
-        if isinstance(value, dict):
-            image = value.get("type") == "image" or str(
-                value.get("mimeType", "")
-            ).lower().startswith("image/")
-            sanitized = {}
-            for key, item in value.items():
-                if image and key in ("data", "blob"):
-                    sanitized[f"{key}_omitted"] = "image payload"
-                else:
-                    sanitized[self.sanitize(key)] = self.sanitize(item)
-            return sanitized
-        if isinstance(value, list):
-            return [self.sanitize(item) for item in value]
-        if isinstance(value, str):
-            value = re.sub(
-                r"data:image/[^\s\"'<>\\)]+",
-                "[omitted image data URI]",
-                value,
-                flags=re.IGNORECASE,
-            )
-            for credential in self.credential_values:
-                value = value.replace(credential, "[redacted credential]")
-        return value
-
-    def save(self, data: dict[str, Any]) -> None:
-        if self.persistence_failed:
-            raise ProbePersistenceError("MCP trace persistence failed; probe stopped.")
-        try:
-            write_json(self.path, data)
-        except Exception:  # noqa: BLE001 -- persistence errors may contain secrets
-            self.persistence_failed = True
-            raise ProbePersistenceError(
-                "MCP trace persistence failed; probe stopped."
-            ) from None
-        self.data = data
-
-    def finish(self, state: str, diagnostic: str | None = None) -> None:
-        data = copy.deepcopy(self.data)
-        data.update(state=state, finished_at=timestamp())
-        if diagnostic is not None:
-            data["diagnostic"] = diagnostic
-        self.save(data)
 
 
 class OverviewIdentity(BaseModel):
@@ -165,7 +82,17 @@ class QuietStdioServer(MCPServerStdio):
             "started_at": timestamp(),
             "state": "started",
         }
+        if "model_requests" in data:
+            call.update(
+                sdk_tool_call_id=self.trace.active_tool_call_id,
+                model_request_id=(
+                    data["model_requests"][-1]["request_id"]
+                    if data["model_requests"]
+                    else None
+                ),
+            )
         data["calls"].append(call)
+        self.trace.event(data, "mcp_call", call["call_id"])
         self.trace.save(data)
         started = perf_counter()
         data = copy.deepcopy(self.trace.data)
@@ -194,6 +121,7 @@ class QuietStdioServer(MCPServerStdio):
             finished_at=timestamp(),
             elapsed_seconds=perf_counter() - started,
         )
+        self.trace.event(data, "mcp_response", call["call_id"])
         self.trace.save(data)
         return result
 
@@ -239,7 +167,9 @@ def verify_run(run_dir: Path) -> tuple[RunManifest, Path, str]:
     return manifest, pdf, digest
 
 
-def child_environment(pdf: Path, run_dir: Path) -> dict[str, str]:
+def child_environment(
+    pdf: Path, run_dir: Path, *, agent_mode: bool = False
+) -> dict[str, str]:
     # Inherit only launch-related variables; model credentials/settings stay out.
     env = get_default_environment()
     for key in ("COMSPEC", "WINDIR", "TMP"):
@@ -250,6 +180,15 @@ def child_environment(pdf: Path, run_dir: Path) -> dict[str, str]:
         PDF_INGESTION_RUN_DIR=str((run_dir / "mcp").resolve()),
         PYTHONDONTWRITEBYTECODE="1",
     )
+    if agent_mode:
+        for key in (
+            "SKYNET_BASE_URL",
+            "SKYNET_API_KEY",
+            "VISUAL_INSPECTION_MODEL",
+            "VISUAL_INSPECTION_TIMEOUT_SECONDS",
+        ):
+            if key in os.environ:
+                env[key] = os.environ[key]
     return env
 
 
@@ -269,7 +208,14 @@ def decode_overview(result: CallToolResult) -> OverviewIdentity:
         raise ProbeError("Overview identity fields are missing or invalid.") from None
 
 
-async def probe(run_dir: Path, mcp_executable: Path, mcp_cwd: Path) -> None:
+async def probe(
+    run_dir: Path,
+    mcp_executable: Path,
+    mcp_cwd: Path,
+    *,
+    agent_model: str | None = None,
+    max_turns: int = 8,
+) -> None:
     run_dir = run_dir.resolve()
     manifest, pdf, digest = verify_run(run_dir)
     mcp_executable, mcp_cwd = mcp_executable.resolve(), mcp_cwd.resolve()
@@ -278,7 +224,39 @@ async def probe(run_dir: Path, mcp_executable: Path, mcp_cwd: Path) -> None:
     if not mcp_cwd.is_dir():
         raise ProbeError("MCP working directory must already exist.")
 
-    trace = ProbeTrace(run_dir, manifest)
+    configuration = None
+    if agent_model is not None:
+        agent_model = nonblank_model(agent_model)
+        if (
+            isinstance(max_turns, bool)
+            or not isinstance(max_turns, int)
+            or max_turns <= 0
+        ):
+            raise ProbeError("max_turns must be a positive integer.")
+        load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+        for name in ("SKYNET_BASE_URL", "SKYNET_API_KEY"):
+            if not os.environ.get(name, "").strip():
+                raise ProbeError(f"Missing required environment variable: {name}")
+        configuration = {
+            "model": agent_model,
+            "max_turns": max_turns,
+            "model_timeout_seconds": 600,
+            "session_timeout_seconds": 600,
+            "model_max_retries": 0,
+            "mcp_max_retry_attempts": 0,
+            "parallel_tool_calls": False,
+            "max_function_tool_concurrency": 1,
+            "sdk_tracing_disabled": True,
+            "visual_model": os.environ.get("VISUAL_INSPECTION_MODEL"),
+            "visual_timeout_seconds": os.environ.get(
+                "VISUAL_INSPECTION_TIMEOUT_SECONDS"
+            ),
+        }
+    trace = (
+        ProbeTrace(run_dir, manifest)
+        if configuration is None
+        else ProbeTrace(run_dir, manifest, configuration=configuration)
+    )
     print(f"Trace: {json.dumps(str(trace.path))}")
     operation = "startup"
     try:
@@ -289,7 +267,9 @@ async def probe(run_dir: Path, mcp_executable: Path, mcp_cwd: Path) -> None:
                     "command": str(mcp_executable),
                     "args": [],
                     "cwd": str(mcp_cwd),
-                    "env": child_environment(pdf, run_dir),
+                    "env": child_environment(
+                        pdf, run_dir, agent_mode=agent_model is not None
+                    ),
                 },
                 name="run-pdf-connection-probe",
                 errlog=errlog,
@@ -313,31 +293,83 @@ async def probe(run_dir: Path, mcp_executable: Path, mcp_cwd: Path) -> None:
                     raise ProbeError(
                         "Server document identity does not match the verified PDF."
                     )
+                if agent_model is not None:
+                    operation = "agent execution"
+                    await run_evidence_agent(
+                        server,
+                        trace,
+                        model_name=agent_model,
+                        base_url=os.environ["SKYNET_BASE_URL"].strip(),
+                        api_key=os.environ["SKYNET_API_KEY"].strip(),
+                        max_turns=max_turns,
+                    )
                 operation = "cleanup"
     except asyncio.CancelledError:
         try:
-            trace.finish("cancelled", "Connection verification cancelled.")
+            trace.finish("cancelled", "Probe cancelled.", reason="cancellation")
         except ProbePersistenceError:
             pass
         raise
     except Exception as error:  # noqa: BLE001 -- never display external error bodies
+        reason = (
+            "persistence_failure"
+            if trace.persistence_failed
+            else "max_turns"
+            if isinstance(error, MaxTurnsExceeded)
+            else "model_failure"
+            if isinstance(error, ModelBehaviorError)
+            or (
+                trace.data.get("model_requests")
+                and trace.data["model_requests"][-1]["state"] == "model_error"
+            )
+            else "tool_failure"
+            if operation != "cleanup"
+            else "cleanup_failure"
+        )
         diagnostic = (
             str(error)
             if isinstance(error, ProbeError)
+            else "Agent turn budget exhausted."
+            if reason == "max_turns"
+            else "Principal model failed or returned unusable/truncated output."
+            if reason == "model_failure"
             else f"MCP {operation} failed; check the executable and server configuration."
         )
+        if trace.persistence_failed and agent_model is not None:
+            diagnostic = "MCP trace persistence failed; probe stopped."
         try:
-            trace.finish("failed", diagnostic)
+            trace.finish("failed", diagnostic, reason=reason)
         except ProbePersistenceError:
             pass
         raise ProbeError(diagnostic) from None
 
     # Report success only after the connection and child process have closed.
-    trace.finish("succeeded")
+    trace.finish("succeeded", reason="final_answer" if agent_model else None)
     print(f"Run: {json.dumps(manifest.run_id)}")
     print(f"Document: {manifest.document_id}")
     print(f"Tools: {', '.join(sorted(names))}")
-    print("Connection verified; model calls: 0.")
+    if agent_model is None:
+        print("Connection verified; model calls: 0.")
+    else:
+        print(f"Agent completed; counts: {json.dumps(trace.data['counts'])}.")
+
+
+def nonblank_model(value: str) -> str:
+    if not value.strip():
+        raise ProbeError("agent_model must be a nonblank model identifier.")
+    return value.strip()
+
+
+def positive_turns(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "max-turns must be a positive integer."
+        ) from None
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("max-turns must be a positive integer.")
+    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -345,13 +377,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--mcp-executable", type=Path, required=True)
     parser.add_argument("--mcp-cwd", type=Path, required=True)
+    parser.add_argument("--agent-model", type=nonblank_model)
+    parser.add_argument("--max-turns", type=positive_turns, default=8)
     args = parser.parse_args(argv)
     # SDK logs can include tool/error bodies. This standalone probe emits only
     # controlled diagnostics and restores logging for callers of main().
     previous_logging_disable = logging.root.manager.disable
     logging.disable(logging.CRITICAL)
     try:
-        asyncio.run(probe(args.run_dir, args.mcp_executable, args.mcp_cwd))
+        asyncio.run(
+            probe(
+                args.run_dir,
+                args.mcp_executable,
+                args.mcp_cwd,
+                agent_model=args.agent_model,
+                max_turns=args.max_turns,
+            )
+        )
     except ProbeError as error:
         print(f"Connection verification failed: {error}", file=sys.stderr)
         return 1

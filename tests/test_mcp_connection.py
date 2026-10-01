@@ -809,3 +809,597 @@ def test_installed_sdk_closes_scripted_transport(configured_run, monkeypatch, ou
             else "returned"
         )
         assert "sensitive remote error" not in json.dumps(trace)
+
+
+# These tests use the real Runner, Chat Completions conversion, and MCP client.
+def read_agent_trace(run_dir):
+    paths = list((run_dir / "mcp").glob("probe_agent_*.json"))
+    if len(paths) > 1:
+        paths = [
+            p
+            for p in paths
+            if json.loads(p.read_text(encoding="utf-8"))["state"] == "running"
+        ]
+    assert len(paths) == 1
+    return json.loads(paths[0].read_text(encoding="utf-8"))
+
+
+def completion(*tool_calls, text=None, finish=None, choices=True):
+    from openai.types.chat import ChatCompletion
+
+    return ChatCompletion.model_validate(
+        {
+            "id": "provider-response",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "explicit-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": finish or ("tool_calls" if tool_calls else "stop"),
+                    "message": {
+                        "role": "assistant",
+                        "content": text,
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": json.dumps(args),
+                                },
+                            }
+                            for call_id, name, args in tool_calls
+                        ]
+                        or None,
+                    },
+                }
+            ]
+            if choices
+            else [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "provider_extra": {"preserved": True},
+        }
+    )
+
+
+@pytest.fixture
+def agent_script(configured_run, monkeypatch, tmp_path):
+    from openai import AsyncOpenAI
+    from openai.resources.chat.completions import AsyncCompletions
+
+    run_dir, _, _ = configured_run
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SKYNET_BASE_URL", "https://model.invalid/v1")
+    monkeypatch.setenv("SKYNET_API_KEY", "synthetic-agent-secret")
+    for key in ("VISUAL_INSPECTION_MODEL", "VISUAL_INSPECTION_TIMEOUT_SECONDS"):
+        monkeypatch.delenv(key, raising=False)
+    state = SimpleNamespace(
+        responses=[],
+        requests=[],
+        calls=[],
+        closed=False,
+        model_closed=False,
+        active=0,
+        max_active=0,
+        tool_result=None,
+        model_entered=None,
+        tool_entered=None,
+    )
+
+    async def create(resource, **kwargs):
+        assert resource._client.max_retries == 0
+        assert resource._client.timeout == 600
+        saved = read_agent_trace(run_dir)
+        assert saved["model_requests"][-1]["state"] == "started"
+        messages = saved["model_requests"][-1]["request"]["messages"]
+        assert len(messages) == len(kwargs["messages"])
+        assert messages[0] == kwargs["messages"][0]
+        state.requests.append(kwargs)
+        if state.model_entered is not None:
+            state.model_entered.set()
+            await asyncio.Event().wait()
+        assert state.responses, "Unexpected model request or retry"
+        result = state.responses.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    close = AsyncOpenAI.close
+    call_tool = probe.QuietStdioServer.call_tool
+
+    async def measured_call(server, tool_name, arguments, meta=None):
+        state.active += 1
+        state.max_active = max(state.max_active, state.active)
+        try:
+            # Measure outstanding SDK invocations, even if transport handles serially.
+            await asyncio.sleep(0.01)
+            return await call_tool(server, tool_name, arguments, meta=meta)
+        finally:
+            state.active -= 1
+
+    async def recorded_close(client):
+        state.model_closed = True
+        await close(client)
+
+    @asynccontextmanager
+    async def transport(params, errlog):
+        state.environment = params.env
+        replies, reader = anyio.create_memory_object_stream(0)
+        writer, requests = anyio.create_memory_object_stream(10)
+
+        async def serve():
+            async for packet in requests:
+                request = packet.message
+                if not isinstance(request, JSONRPCRequest):
+                    continue
+                if request.method == "server/discover":
+                    await replies.send(
+                        SessionMessage(
+                            JSONRPCError(
+                                jsonrpc="2.0",
+                                id=request.id,
+                                error={"code": -32601, "message": "Method not found"},
+                            )
+                        )
+                    )
+                    continue
+                if request.method == "initialize":
+                    result = {
+                        "protocolVersion": request.params["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "scripted", "version": "1"},
+                    }
+                elif request.method == "tools/list":
+                    result = {
+                        "tools": [
+                            {
+                                "name": name,
+                                "description": f"Evidence tool {name}",
+                                "inputSchema": {"type": "object", "properties": {}},
+                            }
+                            for name in sorted(probe.EXPECTED_TOOLS)
+                        ]
+                    }
+                elif request.method == "tools/call":
+                    saved = (
+                        read_agent_trace(run_dir)
+                        if list((run_dir / "mcp").glob("probe_agent_*.json"))
+                        else read_trace(run_dir)
+                    )
+                    assert saved["calls"][-1]["state"] == "started"
+                    if state.calls:
+                        # The response must be durable before execution, including extras.
+                        raw = saved["model_requests"][-1]["response"]
+                        assert raw["provider_extra"] == {"preserved": True}
+                        assert saved["calls"][-1]["sdk_tool_call_id"] in [
+                            t["id"] for t in raw["choices"][0]["message"]["tool_calls"]
+                        ]
+                    state.calls.append(request.params)
+                    if len(state.calls) == 1:
+                        digest = sha256_file(
+                            run_dir / "input" / "paper with spaces.pdf"
+                        )
+                        response = overview_result(digest)
+                    else:
+                        if state.tool_entered is not None:
+                            state.tool_entered.set()
+                            await asyncio.Event().wait()
+                        if isinstance(state.tool_result, BaseException):
+                            await replies.send(
+                                SessionMessage(
+                                    JSONRPCError(
+                                        jsonrpc="2.0",
+                                        id=request.id,
+                                        error={
+                                            "code": -32603,
+                                            "message": "sensitive transport failure",
+                                        },
+                                    )
+                                )
+                            )
+                            continue
+                        response = state.tool_result or CallToolResult(
+                            content=[
+                                TextContent(
+                                    type="text", text="Page 1: patch length L=12 mm."
+                                )
+                            ]
+                        )
+                    result = response.model_dump(mode="json", by_alias=True)
+                else:
+                    pytest.fail(f"Unexpected MCP method: {request.method}")
+                await replies.send(
+                    SessionMessage(
+                        JSONRPCResponse(
+                            jsonrpc="2.0",
+                            id=request.id,
+                            result=result,
+                        )
+                    )
+                )
+
+        try:
+            async with anyio.create_task_group() as group:
+                group.start_soon(serve)
+                try:
+                    yield reader, writer
+                finally:
+                    group.cancel_scope.cancel()
+        finally:
+            paths = list((run_dir / "mcp").glob("probe_agent_*.json"))
+            if len(paths) == 1:
+                assert read_agent_trace(run_dir)["state"] == "running"
+            state.closed = True
+            for stream in (replies, reader, writer, requests):
+                stream.close()
+
+    monkeypatch.setattr(AsyncCompletions, "create", create)
+    monkeypatch.setattr(AsyncOpenAI, "close", recorded_close)
+    monkeypatch.setattr(probe.QuietStdioServer, "call_tool", measured_call)
+    monkeypatch.setattr(probe, "stdio_client", transport)
+    return state
+
+
+def agent_arguments(configured_run, turns=8):
+    return arguments(configured_run) + [
+        "--agent-model",
+        "explicit-model",
+        "--max-turns",
+        str(turns),
+    ]
+
+
+def test_agent_multiple_rounds_and_sequential_tools(configured_run, agent_script):
+    run_dir, _, _ = configured_run
+    before = {
+        name: (run_dir / name).read_bytes() for name in ("manifest.json", "status.json")
+    }
+    agent_script.responses = [
+        completion(
+            ("sdk-search", "search_paper", {"query": "geometry"}),
+            ("sdk-pages", "read_pages", {"pages": [1]}),
+        ),
+        completion(
+            ("sdk-asset", "get_asset", {"asset_id": "page:1", "question": "Read L."})
+        ),
+        completion(text="Page 1: patch length L=12 mm; width is uncertain."),
+    ]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    saved = read_agent_trace(run_dir)
+    assert saved["state"] == "succeeded"
+    assert saved["termination_reason"] == "final_answer"
+    assert saved["counts"] == {
+        "model_requests": 3,
+        "model_responses": 3,
+        "mcp_calls": 4,
+    }
+    assert saved["usage"]["total_tokens"] == 45
+    assert saved["final_text"].startswith("Page 1:")
+    assert agent_script.closed and agent_script.model_closed
+    assert agent_script.max_active == 1
+    assert [c["name"] for c in agent_script.calls] == [
+        "get_paper_overview",
+        "search_paper",
+        "read_pages",
+        "get_asset",
+    ]
+    assert [c["sdk_tool_call_id"] for c in saved["calls"]] == [
+        None,
+        "sdk-search",
+        "sdk-pages",
+        "sdk-asset",
+    ]
+    for i, r in enumerate(saved["model_requests"], 1):
+        assert r["order"] == i
+        assert r["elapsed_seconds"] >= 0
+        assert datetime.fromisoformat(r["started_at"]).utcoffset() is not None
+        assert r["request"]["parallel_tool_calls"] is False
+        assert {
+            t["function"]["name"] for t in r["request"]["tools"]
+        } == probe.EXPECTED_TOOLS
+        assert r["request"]["messages"][0]["content"] == saved["instructions"]
+        assert r["request"]["messages"] == agent_script.requests[i - 1]["messages"]
+    assert (
+        saved["calls"][1]["model_request_id"]
+        == saved["model_requests"][0]["request_id"]
+    )
+    assert (
+        saved["calls"][2]["model_request_id"]
+        == saved["model_requests"][0]["request_id"]
+    )
+    assert (
+        saved["calls"][3]["model_request_id"]
+        == saved["model_requests"][1]["request_id"]
+    )
+    assert [e["type"] for e in saved["events"]] == [
+        "mcp_call",
+        "mcp_response",
+        "model_request",
+        "model_response",
+        "mcp_call",
+        "mcp_response",
+        "mcp_call",
+        "mcp_response",
+        "model_request",
+        "model_response",
+        "mcp_call",
+        "mcp_response",
+        "model_request",
+        "model_response",
+    ]
+    assert [e["order"] for e in saved["events"]] == list(range(1, 15))
+    assert before == {name: (run_dir / name).read_bytes() for name in before}
+    assert not (run_dir / "pages").exists()
+    assert not (run_dir / "document_conversion").exists()
+    assert "VISUAL_INSPECTION_MODEL" not in agent_script.environment
+    assert agent_script.environment["SKYNET_API_KEY"] == "synthetic-agent-secret"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "max_turns",
+        "model",
+        "transport",
+        "truncated",
+        "empty",
+        "no_choices",
+        "invalid_arguments",
+    ],
+)
+def test_agent_failure_records_and_cleanup(
+    configured_run, agent_script, failure, capsys
+):
+    first = completion(("sdk-first", "read_section", {"section": "Design"}))
+    if failure == "max_turns":
+        agent_script.responses = [first]
+        turns = 1
+    elif failure == "model":
+        agent_script.responses = [first, RuntimeError("sensitive model failure")]
+        turns = 8
+    elif failure == "transport":
+        agent_script.responses = [first]
+        agent_script.tool_result = RuntimeError("sensitive tool failure")
+        turns = 8
+    elif failure == "truncated":
+        agent_script.responses = [
+            completion(("sdk-no-run", "get_asset", {}), finish="length")
+        ]
+        turns = 8
+    elif failure == "invalid_arguments":
+        first.choices[0].message.tool_calls[0].function.arguments = "{invalid"
+        agent_script.responses = [first]
+        turns = 8
+    else:
+        agent_script.responses = [completion(text="", choices=failure != "no_choices")]
+        turns = 8
+    assert probe.main(agent_arguments(configured_run, turns)) == 1
+    saved = read_agent_trace(configured_run[0])
+    assert saved["state"] == "failed"
+    assert saved["termination_reason"] == (
+        "max_turns"
+        if failure == "max_turns"
+        else "tool_failure"
+        if failure == "transport"
+        else "model_failure"
+    )
+    assert saved["final_text"] is None
+    assert agent_script.closed and agent_script.model_closed
+    if failure in ("truncated", "empty", "no_choices", "invalid_arguments"):
+        assert len(agent_script.calls) == 1
+        assert saved["model_requests"][0]["response"]
+    if failure == "truncated":
+        assert (
+            saved["model_requests"][0]["response"]["choices"][0]["finish_reason"]
+            == "length"
+        )
+    if failure == "model":
+        assert len(agent_script.requests) == 2
+        assert saved["model_requests"][-1]["state"] == "model_error"
+        assert saved["counts"]["model_responses"] == 1
+    if failure == "transport":
+        assert saved["calls"][-1]["state"] == "transport_error"
+        assert len(agent_script.requests) == 1
+    output = capsys.readouterr()
+    assert "sensitive" not in output.out + output.err + json.dumps(saved)
+
+
+@pytest.mark.parametrize("phase", ["model", "tool"])
+def test_agent_cancellation_records_and_cleanup(configured_run, agent_script, phase):
+    async def exercise():
+        reached = asyncio.Event()
+        if phase == "model":
+            agent_script.model_entered = reached
+        else:
+            agent_script.tool_entered = reached
+            agent_script.responses = [
+                completion(("sdk-cancel", "get_asset", {"asset_id": "page:1"}))
+            ]
+        task = asyncio.create_task(
+            probe.probe(*configured_run, agent_model="explicit-model")
+        )
+        await asyncio.wait_for(reached.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+
+    asyncio.run(exercise())
+    saved = read_agent_trace(configured_run[0])
+    assert saved["state"] == "cancelled"
+    assert saved["termination_reason"] == "cancellation"
+    assert agent_script.closed and agent_script.model_closed
+    if phase == "model":
+        assert saved["model_requests"][-1]["state"] == "cancelled"
+        assert "response" not in saved["model_requests"][-1]
+    else:
+        assert saved["calls"][-1]["state"] == "cancelled"
+
+
+@pytest.mark.parametrize("failed_write", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
+def test_agent_write_failure_stops_runner(
+    configured_run, agent_script, monkeypatch, failed_write, capsys
+):
+    # Writes: init, preflight call/result, request/response, tool call/result,
+    # next request/response, final text, overall finish.
+    agent_script.responses = [
+        completion(("sdk-first", "read_pages", {}), ("sdk-second", "search_paper", {})),
+        completion(text="Insufficient evidence."),
+    ]
+    replace = persistence.os.replace
+    writes = []
+
+    def failing_replace(source, destination):
+        writes.append(destination)
+        if len(writes) == failed_write:
+            raise OSError("sensitive persistence failure")
+        replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", failing_replace)
+    assert probe.main(agent_arguments(configured_run)) == 1
+    saved = read_agent_trace(configured_run[0])
+    assert saved["state"] == "running"
+    assert agent_script.closed and agent_script.model_closed
+    assert len(agent_script.requests) == (
+        0 if failed_write == 4 else 1 if failed_write <= 10 else 2
+    )
+    assert len(agent_script.calls) == (
+        1 if failed_write <= 6 else 2 if failed_write <= 8 else 3
+    )
+    assert len(writes) == failed_write
+    output = capsys.readouterr()
+    assert "trace persistence failed" in output.err
+    assert "sensitive" not in output.out + output.err
+
+
+def test_agent_redaction_and_visual_settings_from_dotenv(
+    configured_run, agent_script, monkeypatch, tmp_path
+):
+    from mcp.types import ImageContent
+
+    monkeypatch.delenv("SKYNET_API_KEY")
+    (tmp_path / ".env").write_text(
+        "SKYNET_API_KEY=dotenv-secret\nSKYNET_BASE_URL=https://file.invalid\n"
+        "VISUAL_INSPECTION_MODEL=explicit-visual\nVISUAL_INSPECTION_TIMEOUT_SECONDS=600\n",
+        encoding="utf-8",
+    )
+    agent_script.tool_result = CallToolResult(
+        content=[
+            TextContent(type="text", text="L=12 mm dotenv-secret"),
+            ImageContent(type="image", data="aW1hZ2U=", mimeType="image/png"),
+        ]
+    )
+    agent_script.responses = [
+        completion(
+            (
+                "sdk-image",
+                "get_asset",
+                {"asset_id": "page:1", "question": "Read L dotenv-secret"},
+            )
+        ),
+        completion(
+            text="L=12 mm, page:1. dotenv-secret data:image/png;base64,aW1hZ2U="
+        ),
+    ]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    saved = read_agent_trace(configured_run[0])
+    serialized = json.dumps(saved)
+    assert "dotenv-secret" not in serialized
+    assert "aW1hZ2U=" not in serialized
+    assert "extra_headers" not in serialized
+    assert (
+        saved["calls"][1]["response"]["content"][1]["data_omitted"] == "image payload"
+    )
+    assert saved["configuration"]["visual_model"] == "explicit-visual"
+    assert agent_script.environment["SKYNET_BASE_URL"] == "https://model.invalid/v1"
+    assert agent_script.environment["SKYNET_API_KEY"] == "dotenv-secret"
+    assert agent_script.environment["VISUAL_INSPECTION_MODEL"] == "explicit-visual"
+    assert agent_script.environment["VISUAL_INSPECTION_TIMEOUT_SECONDS"] == "600"
+
+
+def test_connection_does_not_load_dotenv(configured_run, fake_connection, monkeypatch):
+    monkeypatch.setattr(
+        probe, "load_dotenv", lambda **kwargs: pytest.fail("Connection loaded .env")
+    )
+    assert probe.main(arguments(configured_run)) == 0
+
+
+def test_agent_missing_visual_configuration_is_preserved(configured_run, agent_script):
+    agent_script.tool_result = CallToolResult(
+        content=[
+            TextContent(type="text", text="Visual model configuration is missing.")
+        ],
+        isError=True,
+        structuredContent={"visual_status": "configuration_missing"},
+    )
+    final = completion(
+        text="The requested inspection failed; geometry details remain uncertain."
+    )
+    final.usage = None
+    agent_script.responses = [
+        completion(
+            (
+                "sdk-visual",
+                "get_asset",
+                {"asset_id": "page:1", "question": "Read dimensions."},
+            )
+        ),
+        final,
+    ]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    saved = read_agent_trace(configured_run[0])
+    assert saved["state"] == "succeeded"
+    assert saved["calls"][-1]["state"] == "mcp_error"
+    assert (
+        saved["calls"][-1]["response"]["structuredContent"]["visual_status"]
+        == "configuration_missing"
+    )
+    assert saved["usage"]["responses_with_usage"] == 1
+    assert len(agent_script.calls) == 2  # No automatic inspection retry.
+    assert "VISUAL_INSPECTION_MODEL" not in agent_script.environment
+    assert "visual_requests" not in saved["counts"]
+
+
+@pytest.mark.parametrize("name", ["SKYNET_BASE_URL", "SKYNET_API_KEY"])
+def test_agent_missing_endpoint_settings_before_trace(
+    configured_run, agent_script, monkeypatch, name
+):
+    monkeypatch.delenv(name)
+    assert probe.main(agent_arguments(configured_run)) == 1
+    assert not (configured_run[0] / "mcp").exists()
+    assert not agent_script.requests and not agent_script.calls
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("--agent-model", " "),
+        ("--max-turns", "0"),
+        ("--max-turns", "-1"),
+        ("--max-turns", "1.5"),
+    ],
+)
+def test_agent_invalid_cli_options(configured_run, option, value):
+    with pytest.raises(SystemExit) as error:
+        probe.main(arguments(configured_run) + [option, value])
+    assert error.value.code == 2
+    assert not (configured_run[0] / "mcp").exists()
+
+
+def test_agent_separate_invocations_preserve_traces(configured_run, agent_script):
+    run_dir, _, _ = configured_run
+    assert probe.main(arguments(configured_run)) == 0
+    connection = next((run_dir / "mcp").glob("probe_connection_*.json"))
+    connection_bytes = connection.read_bytes()
+    agent_script.calls.clear()
+    agent_script.responses = [completion(text="Insufficient evidence.")]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    first = next((run_dir / "mcp").glob("probe_agent_*.json"))
+    first_bytes = first.read_bytes()
+    # The transport fixture's round counter starts again for preflight.
+    agent_script.calls.clear()
+    agent_script.responses = [completion(text="Insufficient evidence.")]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    assert len(list((run_dir / "mcp").glob("probe_agent_*.json"))) == 2
+    assert first.read_bytes() == first_bytes
+    assert connection.read_bytes() == connection_bytes

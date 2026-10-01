@@ -332,7 +332,7 @@ def test_convert_document_to_markdown_persists_successful_conversion(
     )
 
     assert trace["requested_model"] == "nuextract3"
-    assert trace["temperature"] == 0.0
+    assert trace["temperature"] == 0.2
     assert trace["mode"] == "markdown"
     assert trace["enable_thinking"] is False
     assert trace["http_status_code"] == 200
@@ -353,7 +353,7 @@ def test_convert_document_to_markdown_persists_successful_conversion(
     request = client.create_raw_chat_completion.call_args.kwargs
 
     assert request["model"] == "nuextract3"
-    assert request["temperature"] == 0.0
+    assert request["temperature"] == 0.2
     assert request["extra_body"] == {
         "chat_template_kwargs": {
             "mode": "markdown",

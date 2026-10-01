@@ -200,7 +200,7 @@ def test_render_pages_does_not_hide_unexpected_failure(
         *,
         dpi: int,
     ) -> SimpleNamespace:
-        assert dpi == 170
+        assert dpi == 300
         raise RuntimeError("simulated programming error")
 
     monkeypatch.setattr(
@@ -509,7 +509,7 @@ def test_extract_figures_requires_run_directory(
 @pytest.mark.parametrize(
     ("options", "expected_scale", "expected_margin"),
     [
-        ([], 3.0, 2.0),
+        ([], 4.0, 2.0),
         (["--scale", "2.5", "--margin-pt", "1.0"], 2.5, 1.0),
     ],
 )
@@ -573,7 +573,7 @@ def test_extract_figures_reports_expected_failure(
 
     extraction.assert_called_once_with(
         run_dir=run_dir,
-        scale=3.0,
+        scale=4.0,
         margin_pt=2.0,
     )
 
