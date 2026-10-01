@@ -123,6 +123,8 @@ class QuietStdioServer(MCPServerStdio):
         )
         self.trace.event(data, "mcp_response", call["call_id"])
         self.trace.save(data)
+        if tool_name == "get_asset":
+            self.trace.enrich_asset_response(response, arguments)
         return result
 
 

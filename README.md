@@ -93,7 +93,7 @@ The architecture filenames already exist in the baseline; producing them through
 MCP is planned. The probe accepts explicit server executable and working-directory
 paths and optional agent mode; there is no MCP architecture execution path or
 production CLI command yet. Tool calls,
-principal-model requests and visual-model requests will be counted separately;
+principal-model requests and confirmed visual-model calls are counted separately;
 a `get_asset` call or supplied question does not prove a visual-model request
 occurred, particularly for unavailable evidence or configuration failures.
 
@@ -230,14 +230,54 @@ other execution failures. Cancellation records `state=cancelled` and
 `termination_reason=cancellation`. Counts distinguish principal model requests,
 received responses and MCP calls (including the preliminary overview). Raw usage
 is retained per response; totals include only responses reporting usage and state
-their coverage. Tool outcomes remain separate from execution state, and visual
-inference counts/diagnostic linking remain MCP-04 work. Required persistence
-failure stops continuation and returns nonzero; because the writer is unavailable,
+their coverage. Tool outcomes remain separate from execution state. Required
+persistence failure stops continuation and returns nonzero; because the writer is unavailable,
 the last valid trace can retain `state=running`, a `started` record or final text
 without a terminal state. The controlled CLI diagnostic identifies persistence
 failure. Truncated/unusable responses are preserved and fail explicitly. Exit
 codes are 0 for normal completion, 1 for failure and 130 for cancellation. Neither
 probe mode changes manifest/status files or produces an architecture report.
+
+After the complete `get_asset` response is durable, its call record gains a
+`visual` summary, saved before SDK continuation. It retains returned asset ID,
+status/reason, inspection ID, source pages, rendered pages, coverage and
+limitations, plus whether the request contained a nonblank question. Malformed
+JSON, missing/invalid visual fields and conflicting asset/document identity are
+explicit provenance outcomes; the raw response and tool outcome remain intact.
+Rendering alone establishes neither a received completion nor a successful
+observation. Returned partial coverage remains partial.
+
+Diagnostic references use `mcp/inspections/<inspection_id>.json`, relative to the
+bound run. Only that file is read: IDs must match the server's 32 lowercase hex
+characters, paths must remain inside the expected directory (including symlinks),
+and diagnostic inspection, document, asset, question and outcome must match.
+Lookup outcomes are `not_applicable`, `available`, `missing`, `unreadable`,
+`invalid` or `mismatched`. Failed lookups remain limitations, without stopping
+execution or creating files. Only reported model, outcome, duration and available
+token counts are retained; diagnostic prompts, raw responses and image bytes
+are not copied. Question-free access performs no diagnostic lookup.
+
+The agent trace's separate `visual_accounting` counts requested inspections,
+confirmed model calls, cases with unknown call occurrence and successful
+observations. A **confirmed visual-model call** means the public server outcome
+establishes a received completion (`success`, `truncated`, `refused`, `empty`,
+`invalid_response`), or a validated diagnostic contains a received response or
+`received` outcome. Each establishes one call, including unusable completions;
+only `success` establishes an observation. Question-free access, unavailable
+regions, configuration errors before dispatch and rendering/image-persistence
+errors establish zero calls. Timeouts, model errors and diagnostic-persistence
+errors without received-completion evidence remain unknown. Malformed responses
+and interrupted requests also remain unknown when inspection was requested.
+The diagnostic contract has no dispatch marker: settings or `response=null`
+do not prove a request was sent or that no call occurred.
+
+Each observation belongs to its local MCP call ID. Repeated inspection IDs count
+once and link to the first call; inconsistent reuse is flagged on every linked
+call and contributes one unknown case instead of a confirmed count. Distinct
+inspection IDs count independently even when the rendered PNG was reused.
+Visual usage is separate from principal usage, covers only validated diagnostics
+for confirmed unique calls and omits missing token fields. The trace reports a
+confirmed subtotal and unknown cases, without an exact combined inference total.
 
 `init-run` accepts `--runs-root` (default `runs/`). Other available options and
 current defaults are:

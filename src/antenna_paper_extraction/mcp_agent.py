@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import json
 import os
 import re
 from datetime import datetime
@@ -23,6 +24,7 @@ from agents.exceptions import ModelBehaviorError
 from agents.retry import ModelRetrySettings
 from openai import AsyncOpenAI, Omit
 from openai.types.chat import ChatCompletion
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from antenna_paper_extraction.persistence import write_json
 from antenna_paper_extraction.runs import PORTUGAL_TIMEZONE, RunManifest
@@ -57,6 +59,80 @@ def timestamp() -> str:
     return datetime.now(PORTUGAL_TIMEZONE).isoformat()
 
 
+class VisualEvidence(BaseModel):
+    """Only public provenance, never the learned answer or image payload."""
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    status: str
+    reason: str | None = None
+    inspection_id: str | None = None
+    source_page_ids: list[str] | None = None
+    rendered_pages: list[int] | None = None
+    visual_coverage: str | None = None
+    limitations: list[str] | None = None
+
+
+class AssetEvidence(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    id: str
+    document_id: str
+    visual: VisualEvidence | None = None
+
+
+class InspectionPrompt(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    context: AssetEvidence
+
+
+class InspectionDiagnostic(BaseModel):
+    """Validate the server boundary without retaining its prompt/raw response."""
+
+    model_config = ConfigDict(strict=True, extra="ignore")
+
+    inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    question: str
+    prompt: InspectionPrompt
+    outcome: VisualEvidence
+    response: dict | None
+    settings: dict | None
+    duration_seconds: float = Field(ge=0, allow_inf_nan=False)
+    usage: dict | None = None
+
+
+def visual_execution(status: str | None, received: bool = False) -> int | None:
+    if received or status in {
+        "success",
+        "truncated",
+        "refused",
+        "empty",
+        "invalid_response",
+        "received",
+    }:
+        return 1
+    if status in {
+        "not_requested",
+        "unavailable",
+        "configuration_error",
+        "render_error",
+        "image_persistence_error",
+    }:
+        return 0
+    return None
+
+
+def token_usage(value: Any) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: value[key]
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        if type(value.get(key)) is int and value[key] >= 0
+    } or None
+
+
 class ProbeTrace:
     """Small local trace, committed only through the existing atomic writer."""
 
@@ -66,6 +142,7 @@ class ProbeTrace:
         trace_id = uuid4().hex
         mode = "agent" if configuration is not None else "connection"
         self.path = run_dir / "mcp" / f"probe_{mode}_{trace_id}.json"
+        self.run_dir = run_dir.resolve()
         self.data: dict[str, Any] = {
             "trace_id": trace_id,
             "run_id": manifest.run_id,
@@ -105,6 +182,194 @@ class ProbeTrace:
         )
         self.save(self.data)
 
+    def visual_summary(self, response: dict, arguments: dict | None) -> dict:
+        question = (arguments or {}).get("question")
+        requested = isinstance(question, str) and bool(question.strip())
+        summary: dict[str, Any] = {
+            "asset_id": None,
+            "inspection_requested": requested,
+            "provenance": "malformed_response",
+            "diagnostic": {"lookup": "not_applicable", "reference": None},
+            "model_calls": None if requested else 0,
+            "successful_observations": 0,
+            **{key: None for key in VisualEvidence.model_fields},
+        }
+        content = response.get("content", [])
+        if len(content) != 1 or content[0].get("type") != "text":
+            return summary
+        try:
+            payload = json.loads(content[0]["text"])
+        except (ValueError, KeyError, TypeError):
+            return summary
+        try:
+            asset = AssetEvidence.model_validate(payload)
+        except ValidationError:
+            summary["provenance"] = "invalid_fields"
+            return summary
+        summary["asset_id"] = asset.id
+        if asset.visual is None:
+            summary["provenance"] = "missing_visual"
+            return summary
+        visual = asset.visual
+        summary.update(visual.model_dump(), provenance="available")
+        # A response identity conflict cannot establish provenance for this call.
+        if asset.id != (arguments or {}).get(
+            "asset_id"
+        ) or asset.document_id.removeprefix("sha256:") != self.data[
+            "document_id"
+        ].removeprefix("sha256:"):
+            summary["provenance"] = "mismatched_identity"
+            summary["diagnostic"]["lookup"] = "mismatched"
+            return summary
+        diagnostic, received = (
+            self.inspection_diagnostic(asset, question)
+            if requested
+            else (summary["diagnostic"], False)
+        )
+        if diagnostic["lookup"] not in {"available", "not_applicable"}:
+            diagnostic["limitation"] = "Inspection diagnostic could not be validated."
+        summary["diagnostic"] = diagnostic
+        count = visual_execution(visual.status, received)
+        # Contradictory question-free output is retained but cannot imply a call.
+        summary["model_calls"] = count if requested else 0
+        summary["successful_observations"] = int(
+            requested and count == 1 and visual.status == "success"
+        )
+        return summary
+
+    def inspection_diagnostic(
+        self, asset: AssetEvidence, question: Any
+    ) -> tuple[dict, bool]:
+        assert asset.visual is not None
+        inspection_id = asset.visual.inspection_id
+        metadata: dict[str, Any] = {"lookup": "not_applicable", "reference": None}
+        if inspection_id is None:
+            return metadata, False
+        if not re.fullmatch(r"[0-9a-f]{32}", inspection_id):
+            metadata["lookup"] = "invalid"
+            return metadata, False
+        relative = Path("mcp") / "inspections" / f"{inspection_id}.json"
+        metadata["reference"] = relative.as_posix()
+        directory = self.run_dir / "mcp" / "inspections"
+        path = self.run_dir / relative
+        try:
+            resolved_directory = directory.resolve()
+            if resolved_directory != directory or not path.resolve().is_relative_to(
+                resolved_directory
+            ):
+                metadata["lookup"] = "invalid"
+                return metadata, False
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            metadata["lookup"] = "missing"
+            return metadata, False
+        except (OSError, RuntimeError, UnicodeError):
+            metadata["lookup"] = "unreadable"
+            return metadata, False
+        try:
+            record = InspectionDiagnostic.model_validate_json(raw)
+        except ValidationError:
+            metadata["lookup"] = "invalid"
+            return metadata, False
+        context = record.prompt.context
+        if (
+            record.inspection_id != inspection_id
+            or context.id != asset.id
+            or context.document_id != asset.document_id
+            or record.question != question
+            or record.outcome.status not in {asset.visual.status, "received"}
+        ):
+            metadata["lookup"] = "mismatched"
+            return metadata, False
+        metadata.update(
+            lookup="available",
+            model=(record.settings or {}).get("model")
+            if isinstance((record.settings or {}).get("model"), str)
+            else None,
+            outcome=record.outcome.status,
+            duration_seconds=record.duration_seconds,
+            usage=token_usage(record.usage or (record.response or {}).get("usage")),
+        )
+        return (
+            metadata,
+            record.response is not None or record.outcome.status == "received",
+        )
+
+    def enrich_asset_response(self, response: dict, arguments: dict | None) -> None:
+        # call_tool has already committed the original response before this read.
+        data = copy.deepcopy(self.data)
+        data["calls"][-1]["visual"] = self.visual_summary(response, arguments)
+        self.save(data)
+
+    def visual_accounting(self, data: dict) -> dict:
+        observations = [c for c in data["calls"] if c["tool_name"] == "get_asset"]
+        groups: dict[str, list[dict]] = {}
+        for call in observations:
+            visual = call.get("visual")
+            if visual is None:
+                question = (call.get("arguments") or {}).get("question")
+                visual = {
+                    "inspection_requested": isinstance(question, str)
+                    and bool(question.strip()),
+                    "model_calls": None
+                    if isinstance(question, str) and question.strip()
+                    else 0,
+                    "successful_observations": 0,
+                }
+            key = visual.get("inspection_id")
+            if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{32}", key):
+                key = call["call_id"]
+            groups.setdefault(key, []).append({"call": call, "visual": visual})
+        counts = {
+            "inspections_requested": sum(
+                isinstance((c.get("arguments") or {}).get("question"), str)
+                and bool(c["arguments"]["question"].strip())
+                for c in observations
+            ),
+            "confirmed_model_calls": 0,
+            "unknown_model_calls": 0,
+            "successful_observations": 0,
+            "reused_inspection_ids": 0,
+            "inconsistent_inspection_ids": 0,
+            "usage": None,
+        }
+        usages = []
+        for entries in groups.values():
+            first = entries[0]
+            visual = first["visual"]
+            inconsistent = any(
+                e["visual"] != visual
+                or e["call"].get("arguments") != first["call"].get("arguments")
+                for e in entries[1:]
+            )
+            if len(entries) > 1:
+                counts["reused_inspection_ids"] += 1
+                counts["inconsistent_inspection_ids"] += int(inconsistent)
+                for entry in entries:
+                    entry["call"]["inspection_reuse"] = {
+                        "outcome": "inconsistent" if inconsistent else "duplicate",
+                        "first_call_id": first["call"]["call_id"],
+                    }
+            count = None if inconsistent else visual["model_calls"]
+            counts["confirmed_model_calls"] += int(count == 1)
+            counts["unknown_model_calls"] += int(count is None)
+            counts["successful_observations"] += (
+                0 if inconsistent else visual["successful_observations"]
+            )
+            usage = visual.get("diagnostic", {}).get("usage")
+            if count == 1 and usage:
+                usages.append(usage)
+        if usages:
+            counts["usage"] = {
+                "inspections_with_usage": len(usages),
+                **{
+                    key: sum(u[key] for u in usages if key in u)
+                    for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                    if any(key in u for u in usages)
+                },
+            }
+        return counts
+
     def event(self, data: dict, kind: str, identifier: str) -> None:
         if "events" in data:
             data["events"].append(
@@ -141,6 +406,7 @@ class ProbeTrace:
             raise ProbePersistenceError("MCP trace persistence failed; probe stopped.")
         try:
             if "model_requests" in data:
+                data["visual_accounting"] = self.visual_accounting(data)
                 requests = data["model_requests"]
                 data["counts"] = {
                     "model_requests": len(requests),

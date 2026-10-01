@@ -883,6 +883,8 @@ def agent_script(configured_run, monkeypatch, tmp_path):
         active=0,
         max_active=0,
         tool_result=None,
+        tool_results=[],
+        before_model=None,
         model_entered=None,
         tool_entered=None,
     )
@@ -896,6 +898,8 @@ def agent_script(configured_run, monkeypatch, tmp_path):
         assert len(messages) == len(kwargs["messages"])
         assert messages[0] == kwargs["messages"][0]
         state.requests.append(kwargs)
+        if state.before_model is not None:
+            state.before_model(saved)
         if state.model_entered is not None:
             state.model_entered.set()
             await asyncio.Event().wait()
@@ -999,7 +1003,11 @@ def agent_script(configured_run, monkeypatch, tmp_path):
                                 )
                             )
                             continue
-                        response = state.tool_result or CallToolResult(
+                        response = (
+                            state.tool_results.pop(0)
+                            if state.tool_results
+                            else state.tool_result
+                        ) or CallToolResult(
                             content=[
                                 TextContent(
                                     type="text", text="Page 1: patch length L=12 mm."
@@ -1403,3 +1411,524 @@ def test_agent_separate_invocations_preserve_traces(configured_run, agent_script
     assert len(list((run_dir / "mcp").glob("probe_agent_*.json"))) == 2
     assert first.read_bytes() == first_bytes
     assert connection.read_bytes() == connection_bytes
+
+
+@pytest.fixture
+def visual_case(configured_run):
+    """The external server's text-block contract and referenced diagnostic only."""
+    run_dir = configured_run[0]
+    digest = sha256_file(run_dir / "input" / "paper with spaces.pdf")
+
+    def build(status="success", inspection_id="a" * 32, *, received=None):
+        if received is None:
+            received = status in {
+                "success",
+                "truncated",
+                "refused",
+                "empty",
+                "invalid_response",
+            }
+        visual = {
+            "status": status,
+            "source_page_ids": ["page:1", "page:2"],
+            "rendered_pages": [1],
+            "visual_coverage": "partial",
+            "limitations": [
+                "Only the first-page region is available for this multipage asset."
+            ],
+            "render": {"available": True, "clipped": False},
+        }
+        if inspection_id is not None:
+            visual["inspection_id"] = inspection_id
+        if status == "success":
+            visual["answer"] = "L=12 mm is visible on the patch."
+        else:
+            visual["reason"] = "Synthetic public limitation."
+        payload = {
+            "id": "segment:2/figure:1",
+            "document_id": digest,
+            "kind": "figure",
+            "first_page": 1,
+            "last_page": 2,
+            "content": "Deterministic paper evidence.",
+            "visual": visual,
+        }
+        record = {
+            "inspection_id": inspection_id,
+            "question": "Read dimensions.",
+            "prompt": {
+                "system": "PRIVATE-DIAGNOSTIC-PROMPT",
+                "question": "Read dimensions.",
+                "context": {k: v for k, v in payload.items() if k != "visual"},
+            },
+            "image_reference": "images/synthetic.png",
+            "settings": None
+            if status == "configuration_error"
+            else {"model": "synthetic-visual", "max_retries": 0},
+            "response": completion(text="PRIVATE-VISUAL-RESPONSE").model_dump(
+                mode="json"
+            )
+            if received
+            else None,
+            "outcome": {"status": status},
+            "duration_seconds": 0.25,
+            "error_type": None,
+            "http_status": None,
+        }
+        if received:
+            record["usage"] = {
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+                "total_tokens": 10,
+            }
+        return payload, record
+
+    return build
+
+
+def asset_result(payload):
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(payload))])
+
+
+def diagnostic_path(configured_run, record):
+    return configured_run[0] / "mcp" / "inspections" / f"{record['inspection_id']}.json"
+
+
+def run_visual_agent(
+    configured_run, agent_script, result, *, question="Read dimensions."
+):
+    arguments = {"asset_id": "segment:2/figure:1"}
+    if question is not None:
+        arguments["question"] = question
+    agent_script.tool_result = result
+    agent_script.responses = [
+        completion(("sdk-visual", "get_asset", arguments)),
+        completion(text="Evidence and remaining limitations."),
+    ]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    return read_agent_trace(configured_run[0])
+
+
+@pytest.mark.parametrize("question", [None, "", "  "])
+def test_visual_question_free_has_no_diagnostic_lookup(
+    configured_run, agent_script, visual_case, monkeypatch, question
+):
+    payload, _ = visual_case("not_requested", None)
+    payload["visual"].update(rendered_pages=[], visual_coverage="none")
+    monkeypatch.setattr(
+        probe.ProbeTrace,
+        "inspection_diagnostic",
+        lambda *args: pytest.fail("Unexpected lookup"),
+    )
+    saved = run_visual_agent(
+        configured_run, agent_script, asset_result(payload), question=question
+    )
+    summary = saved["calls"][-1]["visual"]
+    assert summary["asset_id"] == payload["id"]
+    assert summary["inspection_requested"] is False
+    assert summary["diagnostic"] == {"lookup": "not_applicable", "reference": None}
+    assert summary["model_calls"] == 0
+    assert saved["visual_accounting"]["inspections_requested"] == 0
+    assert saved["visual_accounting"]["confirmed_model_calls"] == 0
+    assert saved["visual_accounting"]["unknown_model_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    "status,has_id,expected,success",
+    [
+        ("success", True, 1, 1),
+        ("unavailable", False, 0, 0),
+        ("configuration_error", True, 0, 0),
+        ("render_error", False, 0, 0),
+        ("image_persistence_error", False, 0, 0),
+        ("truncated", True, 1, 0),
+        ("refused", True, 1, 0),
+        ("empty", True, 1, 0),
+        ("invalid_response", True, 1, 0),
+        ("timeout", True, None, 0),
+        ("model_error", True, None, 0),
+        ("persistence_error", False, None, 0),
+    ],
+)
+def test_visual_execution_counts_and_provenance(
+    configured_run, agent_script, visual_case, status, has_id, expected, success
+):
+    payload, record = visual_case(status, "a" * 32 if has_id else None)
+    if expected == 0 and status != "configuration_error":
+        payload["visual"].update(rendered_pages=[], visual_coverage="none")
+    if has_id:
+        path = diagnostic_path(configured_run, record)
+        write_json(path, record)
+        before = path.read_bytes()
+    result = asset_result(payload)
+    saved = run_visual_agent(configured_run, agent_script, result)
+    call = saved["calls"][-1]
+    summary = call["visual"]
+    assert call["sdk_tool_call_id"] == "sdk-visual"
+    assert call["response"] == result.model_dump(mode="json", by_alias=True)
+    assert call["state"] == "returned"
+    assert summary["provenance"] == "available"
+    assert summary["inspection_requested"] is True
+    assert summary["status"] == status
+    for field in (
+        "source_page_ids",
+        "rendered_pages",
+        "visual_coverage",
+        "limitations",
+    ):
+        assert summary[field] == payload["visual"][field]
+    assert summary["model_calls"] == expected
+    assert summary["successful_observations"] == success
+    diagnostic = summary["diagnostic"]
+    if has_id:
+        assert diagnostic["lookup"] == "available"
+        assert diagnostic["reference"] == "mcp/inspections/" + "a" * 32 + ".json"
+        assert diagnostic["outcome"] == status
+        assert diagnostic["duration_seconds"] == 0.25
+        assert (
+            diagnostic["model"] == record["settings"]["model"]
+            if record["settings"]
+            else diagnostic["model"] is None
+        )
+        assert path.read_bytes() == before
+    else:
+        assert diagnostic == {"lookup": "not_applicable", "reference": None}
+    accounting = saved["visual_accounting"]
+    assert accounting["inspections_requested"] == 1
+    assert accounting["confirmed_model_calls"] == int(expected == 1)
+    assert accounting["unknown_model_calls"] == int(expected is None)
+    assert accounting["successful_observations"] == success
+    assert accounting["usage"] == (
+        {"inspections_with_usage": 1, **record["usage"]} if expected == 1 else None
+    )
+    assert saved["counts"] == {
+        "model_requests": 2,
+        "model_responses": 2,
+        "mcp_calls": 2,
+    }
+    assert saved["usage"] == {
+        "responses_with_usage": 2,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "total_tokens": 30,
+    }
+    serialized = json.dumps(saved)
+    assert "PRIVATE-DIAGNOSTIC-PROMPT" not in serialized
+    assert "PRIVATE-VISUAL-RESPONSE" not in serialized
+
+
+@pytest.mark.parametrize("received", [False, True])
+def test_visual_model_error_needs_received_completion_not_settings(
+    configured_run, agent_script, visual_case, received
+):
+    payload, record = visual_case("model_error", received=received)
+    write_json(diagnostic_path(configured_run, record), record)
+    saved = run_visual_agent(configured_run, agent_script, asset_result(payload))
+    assert saved["calls"][-1]["visual"]["model_calls"] == (1 if received else None)
+    assert saved["visual_accounting"]["unknown_model_calls"] == int(not received)
+    assert saved["visual_accounting"]["successful_observations"] == 0
+
+
+@pytest.mark.parametrize(
+    "fault,lookup",
+    [
+        ("missing", "missing"),
+        ("malformed", "invalid"),
+        ("shape", "invalid"),
+        ("unreadable", "unreadable"),
+        ("encoding", "unreadable"),
+        ("inspection", "mismatched"),
+        ("document", "mismatched"),
+        ("asset", "mismatched"),
+        ("question", "mismatched"),
+        ("outcome", "mismatched"),
+    ],
+)
+def test_visual_broken_diagnostic_is_explicit(
+    configured_run, agent_script, visual_case, monkeypatch, fault, lookup
+):
+    payload, record = visual_case("timeout")
+    path = diagnostic_path(configured_run, record)
+    if fault == "inspection":
+        record["inspection_id"] = "b" * 32
+    elif fault == "document":
+        record["prompt"]["context"]["document_id"] = "f" * 64
+    elif fault == "asset":
+        record["prompt"]["context"]["id"] = "page:1"
+    elif fault == "question":
+        record["question"] = "Another question."
+    elif fault == "outcome":
+        record["outcome"]["status"] = "success"
+    elif fault == "shape":
+        record = {"inspection_id": "a" * 32}
+    if fault != "missing":
+        write_json(path, record)
+    if fault == "malformed":
+        path.write_text("{broken", encoding="utf-8")
+    if fault == "encoding":
+        path.write_bytes(b"\xff")
+    read = Path.read_text
+    looked_up = []
+
+    def guarded_read(file, *args, **kwargs):
+        if file.parent.name == "inspections":
+            looked_up.append(file)
+            assert file == path
+            if fault == "unreadable":
+                raise PermissionError("synthetic-agent-secret")
+        return read(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read)
+    saved = run_visual_agent(configured_run, agent_script, asset_result(payload))
+    summary = saved["calls"][-1]["visual"]
+    assert looked_up == [path]
+    assert summary["diagnostic"]["lookup"] == lookup
+    assert summary["diagnostic"]["reference"] == "mcp/inspections/" + "a" * 32 + ".json"
+    assert summary["diagnostic"]["limitation"]
+    assert "model" not in summary["diagnostic"]
+    assert saved["visual_accounting"]["unknown_model_calls"] == 1
+    assert "synthetic-agent-secret" not in json.dumps(saved)
+
+
+@pytest.mark.parametrize(
+    "inspection_id",
+    [
+        "../outside",
+        "..\\outside",
+        "A" * 32,
+        "a" * 31,
+        "C:\\outside",
+        "/outside",
+        "a" * 32 + ".json",
+    ],
+)
+def test_visual_invalid_inspection_id_never_reads(
+    configured_run, agent_script, visual_case, monkeypatch, inspection_id
+):
+    payload, _ = visual_case("timeout", inspection_id)
+    read = Path.read_text
+
+    def guarded_read(file, *args, **kwargs):
+        assert file.parent.name != "inspections"
+        return read(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read)
+    saved = run_visual_agent(configured_run, agent_script, asset_result(payload))
+    assert saved["calls"][-1]["visual"]["diagnostic"]["lookup"] == "invalid"
+    assert saved["calls"][-1]["visual"]["diagnostic"]["reference"] is None
+
+
+@pytest.mark.parametrize("target", ["file", "directory"])
+def test_visual_diagnostic_symlink_escape(
+    configured_run, agent_script, visual_case, tmp_path, monkeypatch, target
+):
+    payload, record = visual_case("timeout")
+    path = diagnostic_path(configured_run, record)
+    outside = tmp_path / "outside"
+    write_json(outside / path.name, record)
+    path.parent.parent.mkdir(exist_ok=True)
+    try:
+        if target == "directory":
+            path.parent.symlink_to(outside, target_is_directory=True)
+        else:
+            path.parent.mkdir()
+            path.symlink_to(outside / path.name)
+    except OSError:
+        pytest.skip("Windows does not grant symlink creation")
+    read = Path.read_text
+
+    def guarded_read(file, *args, **kwargs):
+        assert file != path
+        return read(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read)
+    saved = run_visual_agent(configured_run, agent_script, asset_result(payload))
+    assert saved["calls"][-1]["visual"]["diagnostic"]["lookup"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    "fault,provenance",
+    [
+        ("json", "malformed_response"),
+        ("blocks", "malformed_response"),
+        ("missing", "missing_visual"),
+        ("fields", "invalid_fields"),
+        ("document", "mismatched_identity"),
+        ("asset", "mismatched_identity"),
+    ],
+)
+def test_visual_response_decoding_preserves_raw(
+    configured_run, agent_script, visual_case, fault, provenance
+):
+    payload, _ = visual_case()
+    if fault == "missing":
+        del payload["visual"]
+    elif fault == "fields":
+        payload["visual"]["rendered_pages"] = ["1"]
+    elif fault == "document":
+        payload["document_id"] = "f" * 64
+    elif fault == "asset":
+        payload["id"] = "page:1"
+    result = asset_result(payload)
+    if fault == "json":
+        result.content[0].text = "{broken"
+    elif fault == "blocks":
+        result.content.append(TextContent(type="text", text="Extra block."))
+    saved = run_visual_agent(configured_run, agent_script, result)
+    assert saved["calls"][-1]["response"] == result.model_dump(
+        mode="json", by_alias=True
+    )
+    assert saved["calls"][-1]["visual"]["provenance"] == provenance
+    assert saved["visual_accounting"]["unknown_model_calls"] == 1
+
+
+@pytest.mark.parametrize("reuse", ["distinct", "duplicate", "inconsistent"])
+def test_visual_reused_image_and_inspection_ids(
+    configured_run, agent_script, visual_case, reuse
+):
+    first, record = visual_case()
+    write_json(diagnostic_path(configured_run, record), record)
+    second, record = visual_case(
+        inspection_id="b" * 32 if reuse == "distinct" else "a" * 32
+    )
+    if reuse == "distinct":
+        write_json(diagnostic_path(configured_run, record), record)
+    if reuse == "inconsistent":
+        second["visual"]["visual_coverage"] = "single_page"
+    arguments = {"asset_id": first["id"], "question": "Read dimensions."}
+    agent_script.tool_results = [asset_result(first), asset_result(second)]
+    agent_script.responses = [
+        completion(
+            ("sdk-first", "get_asset", arguments),
+            ("sdk-second", "get_asset", arguments),
+        ),
+        completion(text="Evidence with source references."),
+    ]
+    assert probe.main(agent_arguments(configured_run)) == 0
+    saved = read_agent_trace(configured_run[0])
+    counts = saved["visual_accounting"]
+    assert counts["inspections_requested"] == 2
+    assert (
+        counts["confirmed_model_calls"]
+        == {"distinct": 2, "duplicate": 1, "inconsistent": 0}[reuse]
+    )
+    assert counts["unknown_model_calls"] == int(reuse == "inconsistent")
+    assert counts["successful_observations"] == counts["confirmed_model_calls"]
+    assert counts["reused_inspection_ids"] == int(reuse != "distinct")
+    assert counts["inconsistent_inspection_ids"] == int(reuse == "inconsistent")
+    if reuse != "distinct":
+        for call in saved["calls"][1:]:
+            assert call["inspection_reuse"] == {
+                "outcome": reuse,
+                "first_call_id": saved["calls"][1]["call_id"],
+            }
+    if reuse == "distinct":
+        assert counts["usage"]["total_tokens"] == 20
+    elif reuse == "duplicate":
+        assert counts["usage"]["total_tokens"] == 10
+    else:
+        assert counts["usage"] is None
+
+
+def test_visual_raw_then_enriched_durable_before_sdk(
+    configured_run, agent_script, visual_case, monkeypatch
+):
+    payload, record = visual_case()
+    write_json(diagnostic_path(configured_run, record), record)
+    result = asset_result(payload)
+    summarize = probe.ProbeTrace.visual_summary
+    interpreted = []
+
+    def checked_summary(trace, response, arguments):
+        saved = read_agent_trace(configured_run[0])
+        assert saved["calls"][-1]["response"] == result.model_dump(
+            mode="json", by_alias=True
+        )
+        assert "visual" not in saved["calls"][-1]
+        interpreted.append(True)
+        return summarize(trace, response, arguments)
+
+    def before_model(saved):
+        if len(saved["model_requests"]) == 2:
+            assert saved["calls"][-1]["visual"]["diagnostic"]["lookup"] == "available"
+            assert saved["visual_accounting"]["confirmed_model_calls"] == 1
+
+    monkeypatch.setattr(probe.ProbeTrace, "visual_summary", checked_summary)
+    agent_script.before_model = before_model
+    saved = run_visual_agent(configured_run, agent_script, result)
+    assert interpreted == [True]
+    assert len(saved["model_requests"]) == 2
+    assert len(saved["calls"]) == 2
+
+
+@pytest.mark.parametrize("failed_write", [7, 8])
+def test_visual_required_write_failure_stops_sdk(
+    configured_run, agent_script, visual_case, monkeypatch, failed_write
+):
+    payload, record = visual_case()
+    write_json(diagnostic_path(configured_run, record), record)
+    agent_script.tool_result = asset_result(payload)
+    agent_script.responses = [
+        completion(
+            (
+                "sdk-visual",
+                "get_asset",
+                {"asset_id": payload["id"], "question": "Read dimensions."},
+            )
+        ),
+        completion(text="Must never be requested."),
+    ]
+    replace = persistence.os.replace
+    writes = []
+
+    def failing_replace(source, destination):
+        writes.append(destination)
+        if len(writes) == failed_write:
+            raise OSError("synthetic-agent-secret")
+        replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", failing_replace)
+    assert probe.main(agent_arguments(configured_run)) == 1
+    saved = read_agent_trace(configured_run[0])
+    assert len(agent_script.requests) == 1
+    assert len(agent_script.calls) == 2
+    assert len(writes) == failed_write
+    assert "visual" not in saved["calls"][-1]
+    assert ("response" in saved["calls"][-1]) == (failed_write == 8)
+    assert agent_script.closed and agent_script.model_closed
+
+
+def test_visual_summary_excludes_private_payload_and_keeps_partial_usage(
+    configured_run, agent_script, visual_case
+):
+    payload, record = visual_case()
+    payload["visual"]["reason"] = (
+        "synthetic-agent-secret data:image/png;base64,PRIVATE-IMAGE"
+    )
+    record["prompt"]["context"]["image"] = "PRIVATE-IMAGE-BYTES"
+    record["response"]["image"] = "PRIVATE-IMAGE-BYTES"
+    record["settings"]["api_key"] = "synthetic-agent-secret"
+    record["usage"] = {
+        "prompt_tokens": 7,
+        "completion_tokens": None,
+        "extra": "PRIVATE-USAGE",
+    }
+    path = diagnostic_path(configured_run, record)
+    write_json(path, record)
+    before = path.read_bytes()
+    saved = run_visual_agent(configured_run, agent_script, asset_result(payload))
+    serialized = json.dumps(saved)
+    for private in (
+        "synthetic-agent-secret",
+        "PRIVATE-IMAGE",
+        "PRIVATE-USAGE",
+        "PRIVATE-DIAGNOSTIC-PROMPT",
+        "PRIVATE-VISUAL-RESPONSE",
+    ):
+        assert private not in serialized
+    assert saved["visual_accounting"]["usage"] == {
+        "inspections_with_usage": 1,
+        "prompt_tokens": 7,
+    }
+    assert saved["calls"][-1]["visual"]["diagnostic"]["usage"] == {"prompt_tokens": 7}
+    assert path.read_bytes() == before

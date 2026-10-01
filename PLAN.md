@@ -127,7 +127,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-04 - Link visual observations to diagnostics and counts
 
-- **Status:** pending
+- **Status:** implemented and tested
 - **Objective:** Make visual evidence and actual inference counts traceable.
 - **Narrow scope:** Extend the running probe's trace with visual statuses,
   inspection IDs, coverage and diagnostic references. Distinguish tool calls,
@@ -137,6 +137,26 @@ generation and general pipeline orchestration are outside this branch's scope.
   unavailable evidence retain the correct diagnostics and counts. A `get_asset`
   call or question is not automatically counted as a successful model request;
   unavailable/configuration failures may make zero visual-model calls.
+- **Implemented:** The existing call path persists the raw MCP response before
+  enriching `get_asset` records with returned visual provenance and run-relative
+  inspection references. Strict local validation checks the server's diagnostic
+  ID/path and inspection/document/asset/question/outcome identity, without copying
+  diagnostics or modifying server files. Separate visual accounting retains
+  confirmed calls, unknown occurrence, successful observations and reported usage;
+  repeated IDs are deduplicated and inconsistent reuse is flagged. No dispatch
+  marker exists in the external diagnostic contract, so ambiguous failures remain
+  unknown. Principal counts/usage, execution order and required-write guarantees
+  are preserved; extraction instructions and lifecycle/report outputs are unchanged.
+- **Verification (2026-10-01):** Scripted SDK/MCP tests and synthetic referenced
+  diagnostics cover question-free access, success and partial coverage, pre-model
+  failures, unusable received completions, ambiguous dispatch, broken/mismatched
+  diagnostics, invalid IDs/escaping symlinks, ID reuse and independent inspections
+  of reused images. Tests verify raw-before-enrichment and enriched-before-SDK
+  persistence, required-write failures stopping continuation, redaction and
+  unchanged principal counters/usage. Focused suite: 124 passed, five Windows
+  symlink skips. Full local suite: 417 passed, eight symlink skips, no failures.
+  Lint, formatting and `git diff --check` passed. No live inference or external
+  server execution was run; the external repository was only read.
 - **Suggested commit:** `feat(tracing): link MCP visual inspection diagnostics`
 
 ## MCP-05 - Adapt architecture instructions to MCP evidence
