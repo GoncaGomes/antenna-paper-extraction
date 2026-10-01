@@ -48,11 +48,12 @@ establishes execution and persistence, not scientific acceptance. Results
 extraction, canonicalization, final consumer JSON generation and general
 pipeline orchestration remain unimplemented and outside this branch's scope.
 
-## Approved MCP experiment - not yet implemented
+## Approved MCP experiment
 
 The `exp/architecture-mcp` branch will compare iterative MCP evidence acquisition
 with the existing extraction path. Its implementation tasks are in
-[PLAN.md](PLAN.md).
+[PLAN.md](PLAN.md). The deterministic connection probe is implemented; agent
+execution and architecture reports through MCP remain planned.
 
 - Reuse `init-run` to preserve one PDF and establish run identity, then launch
   an external MCP server through stdio, bound to that preserved PDF.
@@ -73,10 +74,11 @@ addresses a physical PDF page. Original paper content and learned visual
 observations must remain distinguishable through source and diagnostic references.
 
 Binding configures and validates the document. Store creation or reuse occurs
-when a tool opens the store; binding itself does not create SQLite. Planned
-run-relative artefacts are:
+when a tool opens the store; binding itself does not create SQLite. The probe's
+overview call can create or reuse the store below. Other run-relative artefacts
+remain planned:
 
-| Planned MCP artefact | Purpose |
+| MCP artefact | Purpose |
 | --- | --- |
 | `mcp/store/<sha256[:16]>/paper.sqlite` | Server document store |
 | `mcp/images/...` | Server image assets |
@@ -85,9 +87,10 @@ run-relative artefacts are:
 | `architecture/architecture_execution.json` | MCP execution and incremental trace |
 
 The architecture filenames already exist in the baseline; producing them through
-MCP is planned. There is currently no local MCP connection probe, execution path,
-CLI command or MCP configuration surface. Server launch/model settings and the
-turn-budget configuration will be documented when implemented. Tool calls,
+MCP is planned. The connection-only probe accepts explicit server executable and
+working-directory paths; there is no MCP architecture execution path or production
+CLI command yet. Model settings and the turn-budget configuration will be
+documented when implemented. Tool calls,
 principal-model requests and visual-model requests will be counted separately;
 a `get_asset` call or supplied question does not prove a visual-model request
 occurred, particularly for unavailable evidence or configuration failures.
@@ -130,6 +133,30 @@ uv run antenna-extract convert-document "runs/run_<id>"
 uv run antenna-extract extract-figures "runs/run_<id>"
 uv run antenna-extract extract-architecture "runs/run_<id>"
 ```
+
+To verify only the external MCP connection, use an existing initialized run and
+the separately installed server. Supply all paths explicitly:
+
+```powershell
+uv run --no-sync python scripts/probe_mcp_connection.py `
+  --run-dir "runs/run_<id>" `
+  --mcp-executable "path/to/external-server/.venv/Scripts/mcp-pdf-ingestion.exe" `
+  --mcp-cwd "path/to/external-server"
+```
+
+The probe verifies the actual preserved PDF SHA-256 against the strict run
+manifest before server startup, discovers exactly the six documented tools, and
+calls only `get_paper_overview` with empty arguments to verify its fingerprint.
+It requires successful source preservation, but no rendered pages, conversion
+or figures. The child receives absolute `PDF_INGESTION_PDF` and
+`PDF_INGESTION_RUN_DIR=<run_dir>/mcp` paths and launch-related environment settings;
+model credentials are not forwarded and `.env` is not loaded. Session timeout is
+600 seconds, automatic retries are disabled, and the SDK context closes the
+connection on success, failure and cancellation. Exit code 0 means every check
+passed; failures emit controlled diagnostics and return nonzero. There are zero
+model calls or visual requests, no manifest/status changes, and no persistent
+probe trace. The overview may create or reuse
+`mcp/store/<sha256[:16]>/paper.sqlite`; the probe does not access SQLite directly.
 
 `init-run` accepts `--runs-root` (default `runs/`). Other available options and
 current defaults are:

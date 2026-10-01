@@ -6,9 +6,9 @@ at a time; future file names are indicative until the relevant implementation
 has been inspected. Results extraction, canonicalization, final consumer JSON
 generation and general pipeline orchestration are outside this branch's scope.
 
-## MCP-01 — Connect a preserved run to the external MCP
+## MCP-01 - Connect a preserved run to the external MCP
 
-- **Status:** pending
+- **Status:** implemented and tested; owner acceptance pending
 - **Objective:** Verify a run-bound PDF server connection without LLM calls.
 - **Narrow scope:** Add a small explicitly invoked connection probe with a
   current caller. Read and verify the preserved PDF, launch the configured
@@ -18,9 +18,26 @@ generation and general pipeline orchestration are outside this branch's scope.
 - **Acceptance checks:** Matching and mismatching document identity, discovery
   of the six documented tools, process cleanup on success/failure, Windows
   paths with spaces and zero LLM calls.
+- **Implemented:** `scripts/probe_mcp_connection.py` checks the strict run
+  manifest/status, contained preserved PDF and actual SHA-256 before starting
+  the external executable with caller-supplied paths. It uses Agents SDK stdio,
+  a 600-second session timeout, no retries, a credential-free child environment,
+  exact six-tool discovery and one empty-argument overview call. It compares
+  validated fingerprints without changing stored identities, and leaves run
+  lifecycle files unchanged. No models, visual requests or execution trace.
+- **Verification (2026-10-01):** Scripted connections and the installed SDK's
+  in-memory transport cover identity/tool/response failures, paths with spaces,
+  safe environment/output and cleanup on success, failure and cancellation
+  during startup or overview. Symlink escape tests are present but skipped when
+  Windows does not grant symlink creation. One explicit real connection passed
+  on an existing run, created the expected store, made zero model calls and
+  preserved manifest/status bytes; the external repository remained unchanged.
+  Repository lint/format checks passed. The broader local suite has seven
+  unrelated failures: CLI DPI/scale expectations and conversion temperature
+  expectations differ from existing defaults. These remain outside MCP-01.
 - **Suggested commit:** `feat(mcp): verify a run-bound PDF server connection`
 
-## MCP-02 — Record MCP calls incrementally
+## MCP-02 - Record MCP calls incrementally
 
 - **Status:** pending
 - **Objective:** Make each probe tool exchange inspectable as it occurs.
@@ -33,7 +50,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   payloads are absent.
 - **Suggested commit:** `feat(tracing): persist MCP calls and responses incrementally`
 
-## MCP-03 — Run a narrow sequential agent with model tracing
+## MCP-03 - Run a narrow sequential agent with model tracing
 
 - **Status:** pending
 - **Objective:** Exercise iterative acquisition on a small geometry-evidence task.
@@ -47,7 +64,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   retries are absent. A live probe is explicit.
 - **Suggested commit:** `feat(mcp): run a sequential evidence acquisition agent`
 
-## MCP-04 — Link visual observations to diagnostics and counts
+## MCP-04 - Link visual observations to diagnostics and counts
 
 - **Status:** pending
 - **Objective:** Make visual evidence and actual inference counts traceable.
@@ -61,7 +78,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   unavailable/configuration failures may make zero visual-model calls.
 - **Suggested commit:** `feat(tracing): link MCP visual inspection diagnostics`
 
-## MCP-05 — Adapt architecture instructions to MCP evidence
+## MCP-05 - Adapt architecture instructions to MCP evidence
 
 - **Status:** pending
 - **Objective:** Exercise the existing scientific/report conventions through MCP.
@@ -75,7 +92,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   that distinguish textual sources from visual diagnostics.
 - **Suggested commit:** `feat(architecture): define MCP evidence acquisition instructions`
 
-## MCP-06 — Produce the architecture report and execution artefact
+## MCP-06 - Produce the architecture report and execution artefact
 
 - **Status:** pending
 - **Objective:** Turn the exercised MCP agent into architecture-report execution.
@@ -88,7 +105,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   initialized run without converted Markdown or baseline figure artefacts.
 - **Suggested commit:** `feat(architecture): generate reports from MCP evidence`
 
-## MCP-07 — Integrate architecture execution with run lifecycle
+## MCP-07 - Integrate architecture execution with run lifecycle
 
 - **Status:** pending
 - **Objective:** Track the MCP architecture path using existing run status.
@@ -100,7 +117,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   and prior artefacts are preserved.
 - **Suggested commit:** `feat(runs): track MCP architecture extraction lifecycle`
 
-## MCP-08 — Expose the experimental CLI command
+## MCP-08 - Expose the experimental CLI command
 
 - **Status:** pending
 - **Objective:** Make the existing MCP architecture path explicitly invocable.
@@ -112,7 +129,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   interface, without duplicated orchestration.
 - **Suggested commit:** `feat(cli): expose MCP architecture extraction`
 
-## MCP-09 — Review one pilot paper
+## MCP-09 - Review one pilot paper
 
 - **Status:** pending
 - **Objective:** Assess the MCP report against one known source paper.
@@ -125,7 +142,7 @@ generation and general pipeline orchestration are outside this branch's scope.
   limitations and record configuration and metrics.
 - **Suggested commit:** `docs(architecture): record MCP pilot findings`
 
-## MCP-10 — Compare the six existing cases
+## MCP-10 - Compare the six existing cases
 
 - **Status:** pending
 - **Objective:** Decide whether to adopt or refine the MCP path using comparison
