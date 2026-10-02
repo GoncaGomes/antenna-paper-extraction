@@ -300,14 +300,46 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-08 - Expose the experimental CLI command
 
-- **Status:** pending
+- **Status:** implemented; local working-tree diff ready for owner review.
 - **Objective:** Make the existing MCP architecture path explicitly invocable.
-- **Narrow scope:** Expose an experimental CLI command with server/model
-  settings and `max_turns`. Document the actual implemented configuration and
-  commands; retain the baseline command and reuse orchestration outside the CLI.
-- **Acceptance checks:** Verify CLI success/error reporting, settings and budget
-  validation, baseline retention and documentation matching the implemented
-  interface, without duplicated orchestration.
+- **Implemented:** `antenna-extract extract-architecture-mcp RUN_DIR
+  [--max-turns N]` always selects architecture, publishes the report and tracks
+  `architecture_mcp_extraction`; the positive budget defaults to 80. The baseline
+  command and lifecycle are unchanged.
+- **Runtime:** `mcp_runtime.py` owns the moved connection/agent orchestration,
+  identity validation, transport, recording and publication/lifecycle handling.
+  Both callers use it directly. The development script keeps its parser,
+  explicit server/model arguments, budget 8, timeout defaults and controlled
+  invocation diagnostics; callers load `.env`, with process values taking
+  precedence.
+- **Configuration:** The MCP CLI reuses principal architecture settings and
+  additionally requires visual model/timeout and existing executable/cwd paths.
+  Validation precedes reservation, lifecycle start and external calls. The
+  principal timeout reaches `RecordedOpenAI`; visual settings reach the child;
+  session/tool timeout is visual timeout plus 60 seconds. All effective timeouts
+  are recorded. The executable launches directly without shell parsing; document
+  binding comes from the verified run. Credentials remain excluded from settings
+  repr and uncontrolled third-party errors/logs are suppressed.
+- **Acceptance evidence:** Existing scripted SDK, lifecycle, publication and
+  failure tests now patch the package runtime; parser tests remain against the
+  development script. Compact CLI coverage verifies default/explicit budgets,
+  settings/path validation, `.env` precedence, success/failure/cancellation and
+  logging restoration. One scripted CLI/runtime execution verifies all three
+  timeout settings, verified document binding and report publication. Existing
+  baseline CLI coverage still passes. README documents configuration, command,
+  output paths, independent phases, rejection behaviour and exit codes.
+- **Verification:** `uv run --no-sync pytest tests/test_architecture_cli.py
+  tests/test_mcp_connection.py tests/test_cli.py -q`: 246 passed, 8 skipped.
+  `uv run --no-sync pytest -q`: 493 passed, 11 skipped. Skips require symlink
+  creation unavailable on this Windows environment. `uv run --no-sync ruff
+  check .`, `uv run --no-sync ruff format --check .` and `git diff --check`
+  pass. CLI `--help` confirms the initialized-run prerequisite and default 80.
+  All verification used the existing environment without dependency sync.
+- **Limitations:** No live inference, real external server execution or dependency
+  synchronization. Operational success remains distinct from scientific
+  acceptance. No retry, resume, overwrite or recovery; independently atomic
+  trace/status persistence and publication rollback retain existing limitations.
+  Live pilot evaluation remains MCP-09.
 - **Suggested commit:** `feat(cli): expose MCP architecture extraction`
 
 ## MCP-09 - Review one pilot paper

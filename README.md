@@ -55,15 +55,17 @@ with the existing extraction path. Its implementation tasks are in
 [PLAN.md](PLAN.md). The deterministic connection probe, narrow geometry evidence
 task, MCP architecture report persistence and its independent run lifecycle are
 implemented. The explicit development probe can publish the report and incremental
-execution trace; a production MCP CLI and live scientific evaluation remain pending.
+execution trace. The experimental `extract-architecture-mcp` CLI is implemented;
+live scientific evaluation remains pending.
 
 - Reuse `init-run` to preserve one PDF and establish run identity, then launch
   an external MCP server through stdio, bound to that preserved PDF.
 - Keep the server in its own repository and environment. Server-derived data
   belongs under `<run_dir>/mcp/`; its source tree is not copied here.
 - Let the architecture agent acquire evidence iteratively through all six MCP
-  tools using the Agents SDK. Use a finite, configurable turn budget, initially
-  proposed as 80, with sequential model/tool execution and no automatic retries.
+  tools using the Agents SDK. Use a finite, configurable turn budget, defaulting
+  to 80 in the production CLI, with sequential model/tool execution and no
+  automatic retries.
 - Allow explicitly requested visual inspection inside the MCP. Persist tool
   and model traces incrementally and produce the existing architecture evidence
   report, retaining the baseline path for comparison.
@@ -88,7 +90,7 @@ The implemented MCP paths are:
 | `mcp/inspections/...` | Visual inspection diagnostics |
 | `mcp/probe_connection_<unique-id>.json` | Incremental deterministic connection-probe trace |
 | `mcp/probe_agent_<unique-id>.json` | Geometry or architecture probe: ordered model/MCP trace and `final_text` |
-| `mcp/architecture/architecture_evidence_report.md` | MCP-derived evidence report, explicitly published with `--persist-architecture` |
+| `mcp/architecture/architecture_evidence_report.md` | MCP-derived evidence report, published by the MCP CLI or probe `--persist-architecture` |
 | `mcp/architecture/architecture_execution.json` | Same incremental agent trace, with structural diagnostics and publication metadata |
 
 Baseline architecture artefacts remain under `architecture/`, tracked by
@@ -98,8 +100,8 @@ in either order, preserving each other's phase and artefacts. The baseline still
 requires successful figure extraction; the MCP path requires successful source
 preservation and its own pending phase. The probe accepts
 explicit server executable and working-directory paths and optional geometry or
-architecture agent tasks;
-there is no production MCP architecture CLI command yet. Tool calls,
+architecture agent tasks. The production CLI loads validated server/model settings
+from the environment and always publishes the architecture report. Tool calls,
 principal-model requests and confirmed visual-model calls are counted separately;
 a `get_asset` call or supplied question does not prove a visual-model request
 occurred, particularly for unavailable evidence or configuration failures.
@@ -113,8 +115,8 @@ uv sync
 uv run antenna-extract --help
 ```
 
-`convert-document`, `extract-architecture` and the probe's agent mode load `.env`
-from the current working directory; existing process environment values take
+`convert-document`, `extract-architecture`, `extract-architecture-mcp` and the
+probe's agent mode load `.env` from the current working directory; existing process environment values take
 precedence.
 
 | Environment variable | Used by |
@@ -123,8 +125,12 @@ precedence.
 | `SKYNET_API_KEY` | Conversion, architecture and agent probe: endpoint credential |
 | `DOCUMENT_EXTRACTOR_MODEL` | Conversion: deployed NuExtract3 identifier |
 | `DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS` | Conversion: positive timeout in seconds |
-| `ARCHITECTURE_AGENT_MODEL` | Architecture: deployed model identifier |
-| `ARCHITECTURE_AGENT_TIMEOUT_SECONDS` | Architecture: positive finite timeout in seconds |
+| `ARCHITECTURE_AGENT_MODEL` | Baseline and MCP architecture: deployed principal model identifier |
+| `ARCHITECTURE_AGENT_TIMEOUT_SECONDS` | Baseline and MCP architecture: positive finite timeout per principal-model request in seconds |
+| `VISUAL_INSPECTION_MODEL` | MCP architecture CLI: required deployed visual model identifier |
+| `VISUAL_INSPECTION_TIMEOUT_SECONDS` | MCP architecture CLI: required positive finite timeout per child visual-model request in seconds |
+| `MCP_PDF_SERVER_EXECUTABLE` | MCP architecture CLI: existing external server executable file |
+| `MCP_PDF_SERVER_CWD` | MCP architecture CLI: existing external server working directory |
 
 Each command requires all its listed variables. Keep credentials local; do not
 commit `.env`, PDFs or large run artefacts. `extract-figures` requires no
@@ -143,6 +149,65 @@ uv run antenna-extract convert-document "runs/run_<id>"
 uv run antenna-extract extract-figures "runs/run_<id>"
 uv run antenna-extract extract-architecture "runs/run_<id>"
 ```
+
+To run experimental MCP architecture extraction, only `init-run` is required.
+Configure all eight MCP CLI settings in the process environment or the current
+working directory's `.env`, for example:
+
+```dotenv
+SKYNET_BASE_URL=https://your-endpoint/v1
+SKYNET_API_KEY=your-local-credential
+ARCHITECTURE_AGENT_MODEL=your-deployed-principal-model
+ARCHITECTURE_AGENT_TIMEOUT_SECONDS=600
+VISUAL_INSPECTION_MODEL=your-deployed-visual-model
+VISUAL_INSPECTION_TIMEOUT_SECONDS=600
+MCP_PDF_SERVER_EXECUTABLE='C:\dev\reviewer-mcp\.venv\Scripts\mcp-pdf-ingestion.exe'
+MCP_PDF_SERVER_CWD='C:\dev\reviewer-mcp'
+```
+
+The command is `antenna-extract extract-architecture-mcp RUN_DIR [--max-turns N]`.
+`RUN_DIR` is required; `--max-turns` must be a positive integer and defaults to 80.
+This is an opt-in example, not part of local verification:
+
+```powershell
+uv run --no-sync antenna-extract extract-architecture-mcp `
+  "C:\dev\antenna-paper-extraction\runs\run_<id>" `
+  --max-turns 80
+```
+
+Process environment takes precedence over `.env` (`override=False`). The CLI
+validates every required setting and both server paths before output reservation,
+lifecycle changes or external calls. Quote paths containing spaces. It launches
+the configured executable directly through stdio with the configured working
+directory; it does not parse shell command strings, load the server repository's
+`.env`, install the server or synchronize its dependencies. There are no CLI
+model, timeout or server-path overrides.
+
+The principal timeout applies to each model request, not the entire run;
+`max_turns` bounds agent iterations. The child receives the configured visual
+model and visual timeout. The MCP session/tool timeout is the visual timeout plus
+60 seconds for rendering and transport, without another environment setting.
+Execution JSON records all three effective timeouts. Execution is sequential,
+automatic retries and SDK tracing are disabled. Logs are suppressed during this
+command and restored afterwards; errors exclude raw third-party exception bodies.
+
+The verified run supplies `PDF_INGESTION_PDF` and
+`PDF_INGESTION_RUN_DIR=<run_dir>/mcp`; binding values from `.env` are ignored.
+Only established launch variables and endpoint/visual settings are forwarded.
+The CLI always runs the architecture task with publication and independent
+`architecture_mcp_extraction` tracking; the baseline `extract-architecture`
+command and `architecture_extraction` phase retain their behaviour. No rendering,
+NuExtract3 conversion or Docling figures are prerequisites.
+
+Outputs are `mcp/architecture/architecture_evidence_report.md` and
+`mcp/architecture/architecture_execution.json`, alongside server stores, images
+and inspection diagnostics. Any existing `mcp/architecture` entry is rejected,
+and the MCP phase must be pending. Failed executions retain their reservation;
+there is no overwrite, retry, reset or resume. Exit codes are 0 for success,
+1 for operational/configuration failure, 2 for invalid command arguments and
+130 for interruption/cancellation. Structural validation remains diagnostic;
+scientific validation and live evaluation are pending. The publication and
+failure-persistence limitations described below apply to both callers.
 
 To verify only the external MCP connection, use an existing initialized run and
 the separately installed server. Supply all paths explicitly:
@@ -281,7 +346,7 @@ are attempted independently, preserving the original execution reason and availa
 raw responses. An unavailable writer can leave a running trace or phase; failed
 report removal can leave Markdown without durable global success. Controlled
 diagnostics report these limitations. No cross-file transaction, retry or recovery
-is provided. The production CLI remains MCP-08 work.
+is provided. The production CLI uses the same shared runtime and persistence policy.
 
 Scripted local tests establish integration and structural compatibility, including
 H-series tables; live model policy compliance and scientific accuracy remain
@@ -297,8 +362,10 @@ only these four endpoint/visual settings in addition to the existing launch
 environment. Missing visual configuration remains a server-reported limitation
 if inspection is requested; no visual model is selected automatically.
 
-The principal model uses OpenAI-compatible Chat Completions with a 600-second
-timeout. Model/client and MCP retries are disabled. SDK tool concurrency is one,
+The development probe uses OpenAI-compatible Chat Completions with a 600-second
+principal timeout and 600-second MCP session timeout; its visual timeout is
+forwarded from the optional environment setting. Model/client and MCP retries
+are disabled. SDK tool concurrency is one,
 including when a model returns multiple tool calls, and `parallel_tool_calls` is
 false. SDK tracing is disabled. No live inference is part of local tests.
 
@@ -331,7 +398,8 @@ codes are 0 for normal completion, 1 for failure and 130 for cancellation. Probe
 without persistence remain byte-for-byte neutral for manifest/status files.
 Publication mode changes only the MCP phase in `status.json`; `manifest.json` and
 baseline phases remain unchanged.
-Separate MCP architecture report/execution files require `--persist-architecture`.
+Separate MCP architecture report/execution files are always published by the MCP
+CLI; development probes require `--persist-architecture`.
 
 After the complete `get_asset` response is durable, its call record gains a
 `visual` summary, saved before SDK continuation. It retains returned asset ID,
@@ -383,6 +451,7 @@ current defaults are:
 | `extract-figures --scale` | 4.0 | 3.0 |
 | `extract-figures --margin-pt` | 2.0 | 2.0 |
 | `extract-architecture --max-assets` | 6 | 6 |
+| `extract-architecture-mcp --max-turns` | 80 | Shared probe: 8 |
 
 `--scale` controls PDFium crop rendering, not Docling settings. The CLI help for
 `--scale` still says 3.0 and needs a separate correction. Tests now expect the

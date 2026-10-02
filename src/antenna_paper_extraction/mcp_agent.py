@@ -572,11 +572,12 @@ async def run_evidence_agent(
     base_url: str,
     api_key: str,
     max_turns: int,
+    principal_timeout_seconds: float = 600,
 ) -> None:
     async with RecordedOpenAI(
         base_url=base_url,
         api_key=api_key,
-        timeout=600,
+        timeout=principal_timeout_seconds,
         max_retries=0,
     ) as client:
         client.record_to(trace)
