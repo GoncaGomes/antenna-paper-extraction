@@ -53,10 +53,9 @@ pipeline orchestration remain unimplemented and outside this branch's scope.
 The `exp/architecture-mcp` branch will compare iterative MCP evidence acquisition
 with the existing extraction path. Its implementation tasks are in
 [PLAN.md](PLAN.md). The deterministic connection probe, narrow geometry evidence
-task and MCP architecture report persistence are implemented. The explicit
-development probe can publish the report and incremental execution trace;
-lifecycle integration, a production MCP CLI and live scientific evaluation
-remain pending.
+task, MCP architecture report persistence and its independent run lifecycle are
+implemented. The explicit development probe can publish the report and incremental
+execution trace; a production MCP CLI and live scientific evaluation remain pending.
 
 - Reuse `init-run` to preserve one PDF and establish run identity, then launch
   an external MCP server through stdio, bound to that preserved PDF.
@@ -92,7 +91,12 @@ The implemented MCP paths are:
 | `mcp/architecture/architecture_evidence_report.md` | MCP-derived evidence report, explicitly published with `--persist-architecture` |
 | `mcp/architecture/architecture_execution.json` | Same incremental agent trace, with structural diagnostics and publication metadata |
 
-Baseline architecture artefacts remain under `architecture/`. The probe accepts
+Baseline architecture artefacts remain under `architecture/`, tracked by
+`architecture_extraction`. MCP publication uses `architecture_mcp_extraction`
+and `mcp/architecture/`. Both approaches can run sequentially in the same run,
+in either order, preserving each other's phase and artefacts. The baseline still
+requires successful figure extraction; the MCP path requires successful source
+preservation and its own pending phase. The probe accepts
 explicit server executable and working-directory paths and optional geometry or
 architecture agent tasks;
 there is no production MCP architecture CLI command yet. Tool calls,
@@ -237,17 +241,22 @@ and architecture-text probes retain their paths and behaviour.
 
 `--persist-architecture` requires `--agent-task architecture` and a nonblank
 explicit `--agent-model`. Local configuration and preserved-PDF/identity preflight
-complete before exclusively reserving `mcp/architecture/`. No rendered pages,
+and a pending `architecture_mcp_extraction` check complete before exclusively
+reserving `mcp/architecture/`. Invalid preflight or existing-output rejection
+does not change `status.json` or start external calls. No rendered pages,
 NuExtract3 conversion, `document.md`, Docling figures or successful baseline
 preprocessing phases are required. Existing server stores, images, inspections,
 probe traces and baseline architecture outputs are allowed. Any existing
 `mcp/architecture` entry is rejected, including an empty directory, file or broken
 symlink; outputs must remain contained in the run's MCP directory. Failed
-executions retain their reservation and reject a later invocation.
+executions retain their reservation and reject a later invocation. Running,
+succeeded and failed MCP phases are rejected without automatic reset or resume.
 
 The same recorder starts directly in `mcp/architecture/architecture_execution.json`
-before external calls; it creates no duplicate `probe_agent` trace. Its
-`structural_validation` and `report_path` initially contain null. After usable
+before external calls; it creates no duplicate `probe_agent` trace. After initial
+trace persistence, the MCP phase enters `running` before server startup. If that
+status write fails, no external execution starts and available diagnostics remain.
+Its `structural_validation` and `report_path` initially contain null. After usable
 final text and successful model/server cleanup, the existing structural validator
 records `passed` and `errors` before atomic UTF-8 Markdown publication. Non-empty
 structurally invalid reports are still published, with `passed=false`; operational
@@ -258,9 +267,21 @@ rewriting or repair. Success is persisted only after publication, with
 failures return failure with `termination_reason=persistence_failure` when
 diagnostics can be saved. If final execution persistence fails, removal of only
 the just-published report is attempted; the last valid JSON and other evidence
-are preserved. An unavailable writer can leave a running trace, and failed report
-removal can leave Markdown without durable success metadata. Lifecycle integration
-and the production CLI remain MCP-07/MCP-08 work.
+are preserved. The global MCP phase enters `succeeded` only after report publication
+and execution success metadata are durable. If this final status write fails,
+execution returns failure, removes only its own published report when possible,
+clears `report_path` in available execution diagnostics and attempts to mark the
+started phase `failed`. Operational failure and turn-budget exhaustion also mark
+that phase `failed`, using controlled reasons. Cancellation marks it `failed` with
+reason `cancellation`, while the execution trace remains `cancelled` and CLI
+cancellation is re-raised.
+
+Execution JSON and `status.json` remain separately atomic files. Failure updates
+are attempted independently, preserving the original execution reason and available
+raw responses. An unavailable writer can leave a running trace or phase; failed
+report removal can leave Markdown without durable global success. Controlled
+diagnostics report these limitations. No cross-file transaction, retry or recovery
+is provided. The production CLI remains MCP-08 work.
 
 Scripted local tests establish integration and structural compatibility, including
 H-series tables; live model policy compliance and scientific accuracy remain
@@ -306,8 +327,10 @@ persistence failure stops continuation and returns nonzero; because the writer i
 the last valid trace can retain `state=running`, a `started` record or final text
 without a terminal state. The controlled CLI diagnostic identifies persistence
 failure. Truncated/unusable responses are preserved and fail explicitly. Exit
-codes are 0 for normal completion, 1 for failure and 130 for cancellation. No
-probe mode changes manifest/status files or marks baseline phases as succeeded.
+codes are 0 for normal completion, 1 for failure and 130 for cancellation. Probes
+without persistence remain byte-for-byte neutral for manifest/status files.
+Publication mode changes only the MCP phase in `status.json`; `manifest.json` and
+baseline phases remain unchanged.
 Separate MCP architecture report/execution files require `--persist-architecture`.
 
 After the complete `get_asset` response is durable, its call record gains a
@@ -399,7 +422,9 @@ run_<id>/
 
 The strict manifests record run/document identity, ordered page assets and phase
 states (`pending`, `running`, `succeeded`, `failed`). Lifecycle timestamps use
-`Europe/Lisbon`; durable JSON and binary writes use atomic replacement.
+`Europe/Lisbon`; durable JSON and binary writes use atomic replacement. Legacy
+status files without `architecture_mcp_extraction` load with that phase `pending`,
+without eager migration or rewriting; schema version remains `1.0`.
 
 Conversion writes each received raw response before parsing, then a trace with
 request settings, HTTP status, finish reason, usage when available and model

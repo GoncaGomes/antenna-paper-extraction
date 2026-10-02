@@ -19,7 +19,7 @@ from mcp.types import (
 )
 from pypdf import PdfWriter
 
-from antenna_paper_extraction import persistence
+from antenna_paper_extraction import persistence, runs
 from antenna_paper_extraction.architecture_report import (
     MCP_ARCHITECTURE_INSTRUCTIONS,
     MCP_ARCHITECTURE_TASK,
@@ -1174,6 +1174,7 @@ def test_agent_multiple_rounds_and_sequential_tools(configured_run, agent_script
 def test_agent_failure_records_and_cleanup(
     configured_run, agent_script, failure, capsys, persist_architecture
 ):
+    before = runs.load_run_status(configured_run[0])
     first = completion(("sdk-first", "read_section", {"section": "Design"}))
     if failure == "max_turns":
         agent_script.responses = [first]
@@ -1211,6 +1212,16 @@ def test_agent_failure_records_and_cleanup(
         else "model_failure"
     )
     assert saved["final_text"] is None
+    after = runs.load_run_status(configured_run[0])
+    if persist_architecture:
+        phase = after.phases.architecture_mcp_extraction
+        assert phase.state == "failed"
+        assert phase.error.type == saved["termination_reason"]
+        assert after.phases.model_dump(exclude={"architecture_mcp_extraction"}) == (
+            before.phases.model_dump(exclude={"architecture_mcp_extraction"})
+        )
+    else:
+        assert after == before
     if persist_architecture:
         assert saved["structural_validation"] is None and saved["report_path"] is None
         assert not (
@@ -1241,6 +1252,8 @@ def test_agent_failure_records_and_cleanup(
 def test_agent_cancellation_records_and_cleanup(
     configured_run, agent_script, phase, persist_architecture
 ):
+    before = runs.load_run_status(configured_run[0])
+
     async def exercise():
         reached = asyncio.Event()
         if phase == "model":
@@ -1268,6 +1281,16 @@ def test_agent_cancellation_records_and_cleanup(
     assert saved["state"] == "cancelled"
     assert saved["termination_reason"] == "cancellation"
     assert agent_script.closed and agent_script.model_closed
+    after = runs.load_run_status(configured_run[0])
+    if persist_architecture:
+        mcp_phase = after.phases.architecture_mcp_extraction
+        assert mcp_phase.state == "failed"
+        assert mcp_phase.error.type == saved["termination_reason"]
+        assert after.phases.model_dump(exclude={"architecture_mcp_extraction"}) == (
+            before.phases.model_dump(exclude={"architecture_mcp_extraction"})
+        )
+    else:
+        assert after == before
     if persist_architecture:
         assert saved["structural_validation"] is None and saved["report_path"] is None
         assert not (
@@ -2304,9 +2327,25 @@ def test_architecture_iterative_acquisition_and_report(
     assert validate_architecture_report(saved["final_text"]) == ()
     assert agent_script.closed and agent_script.model_closed
     assert saved["termination_reason"] == "final_answer"
-    assert metadata_before == {
-        name: (run_dir / name).read_bytes() for name in metadata_before
-    }
+    if persist_architecture:
+        assert (run_dir / "manifest.json").read_bytes() == metadata_before[
+            "manifest.json"
+        ]
+        after = runs.load_run_status(run_dir)
+        assert after.phases.architecture_mcp_extraction.state == "succeeded"
+        assert after.phases.model_dump(
+            mode="json", exclude={"architecture_mcp_extraction"}
+        ) == {
+            name: phase
+            for name, phase in json.loads(metadata_before["status.json"])[
+                "phases"
+            ].items()
+            if name != "architecture_mcp_extraction"
+        }
+    else:
+        assert metadata_before == {
+            name: (run_dir / name).read_bytes() for name in metadata_before
+        }
     assert not (run_dir / "architecture").exists()
     assert {path.name for path in (run_dir / "mcp").iterdir()} == {
         "inspections",
@@ -2423,18 +2462,21 @@ def architecture_arguments(configured_run):
 def test_persist_architecture_requires_explicit_task_and_model(
     configured_run, agent_script, options
 ):
+    status_before = (configured_run[0] / "status.json").read_bytes()
     assert (
         probe.main(arguments(configured_run) + options + ["--persist-architecture"])
         == 1
     )
     assert not (configured_run[0] / "mcp").exists()
     assert not agent_script.requests and not agent_script.calls
+    assert (configured_run[0] / "status.json").read_bytes() == status_before
 
 
 @pytest.mark.parametrize("invalid", ["model", "endpoint", "pdf", "executable"])
 def test_architecture_local_preflight_precedes_reservation(
     configured_run, agent_script, monkeypatch, invalid
 ):
+    status_before = (configured_run[0] / "status.json").read_bytes()
     argv = architecture_arguments(configured_run)
     if invalid == "model":
         argv[argv.index("--agent-model") + 1] = " "
@@ -2452,6 +2494,7 @@ def test_architecture_local_preflight_precedes_reservation(
         assert probe.main(argv) == 1
     assert not (configured_run[0] / "mcp").exists()
     assert not agent_script.requests and not agent_script.calls
+    assert (configured_run[0] / "status.json").read_bytes() == status_before
 
 
 @pytest.mark.parametrize(
@@ -2472,6 +2515,10 @@ def test_architecture_publication_without_baseline_prerequisites(
 
     def publish(path, content):
         assert agent_script.closed and agent_script.model_closed
+        assert (
+            runs.load_run_status(run_dir).phases.architecture_mcp_extraction.state
+            == "running"
+        )
         saved = read_agent_trace(run_dir)
         assert saved["state"] == "running" and saved["report_path"] is None
         assert saved["structural_validation"] is not None
@@ -2513,7 +2560,16 @@ def test_architecture_publication_without_baseline_prerequisites(
         "preserved": True
     }
     assert saved["usage"]["total_tokens"] == 15
-    assert before == {name: (run_dir / name).read_bytes() for name in before}
+    assert (run_dir / "manifest.json").read_bytes() == before["manifest.json"]
+    after = runs.load_run_status(run_dir)
+    assert after.phases.architecture_mcp_extraction.state == "succeeded"
+    assert after.phases.model_dump(
+        mode="json", exclude={"architecture_mcp_extraction"}
+    ) == {
+        name: phase
+        for name, phase in json.loads(before["status.json"])["phases"].items()
+        if name != "architecture_mcp_extraction"
+    }
     assert not list((run_dir / "mcp").glob("probe_*.json"))
     for path in ("pages", "document_conversion", "figures", "architecture"):
         assert not (run_dir / path).exists()
@@ -2525,6 +2581,7 @@ def test_architecture_publication_without_baseline_prerequisites(
 def test_architecture_existing_output_is_preserved(
     configured_run, agent_script, tmp_path, entry
 ):
+    status_before = (configured_run[0] / "status.json").read_bytes()
     output = configured_run[0] / "mcp/architecture"
     output.parent.mkdir()
     if entry in {"directory", "empty_directory"}:
@@ -2553,11 +2610,13 @@ def test_architecture_existing_output_is_preserved(
         assert output.is_symlink() and output.readlink() == target
     else:
         assert list(output.iterdir()) == []
+    assert (configured_run[0] / "status.json").read_bytes() == status_before
 
 
 def test_architecture_exclusive_reservation_rejects_concurrent_output(
     configured_run, agent_script, monkeypatch
 ):
+    status_before = (configured_run[0] / "status.json").read_bytes()
     output = configured_run[0] / "mcp/architecture"
     output.parent.mkdir()
     mkdir = Path.mkdir
@@ -2573,12 +2632,22 @@ def test_architecture_exclusive_reservation_rejects_concurrent_output(
     assert not agent_script.requests and not agent_script.calls
     assert (output / "owner.md").read_bytes() == b"concurrent output"
     assert list(output.iterdir()) == [output / "owner.md"]
+    assert (configured_run[0] / "status.json").read_bytes() == status_before
 
 
 def test_architecture_existing_mcp_and_baseline_data_are_allowed(
     configured_run, agent_script
 ):
     run_dir = configured_run[0]
+    for phase in (
+        "page_rendering",
+        "document_conversion",
+        "figure_extraction",
+        "architecture_extraction",
+    ):
+        getattr(runs, f"mark_{phase}_running")(run_dir)
+        getattr(runs, f"mark_{phase}_succeeded")(run_dir)
+    baseline = runs.load_run_status(run_dir).phases.architecture_extraction
     existing = {}
     for name in (
         "mcp/store/existing/paper.sqlite",
@@ -2599,10 +2668,13 @@ def test_architecture_existing_mcp_and_baseline_data_are_allowed(
         run_dir / "mcp/probe_agent_existing.json"
     ]
 
+    assert runs.load_run_status(run_dir).phases.architecture_extraction == baseline
+
 
 def test_architecture_mcp_path_escape_prevents_execution(
     configured_run, agent_script, tmp_path
 ):
+    status_before = (configured_run[0] / "status.json").read_bytes()
     outside = tmp_path / "outside"
     outside.mkdir()
     try:
@@ -2612,6 +2684,7 @@ def test_architecture_mcp_path_escape_prevents_execution(
     assert probe.main(architecture_arguments(configured_run)) == 1
     assert not agent_script.requests and not agent_script.calls
     assert list(outside.iterdir()) == []
+    assert (configured_run[0] / "status.json").read_bytes() == status_before
 
 
 @pytest.mark.parametrize(
@@ -2685,7 +2758,7 @@ def test_architecture_required_writes_preserve_last_valid_execution(
         path = Path(destination)
         data = (
             json.loads(Path(source).read_text(encoding="utf-8"))
-            if path.suffix == ".json"
+            if path.name == "architecture_execution.json"
             else None
         )
         failure = (
@@ -2709,7 +2782,7 @@ def test_architecture_required_writes_preserve_last_valid_execution(
             and data["state"] == "succeeded"
         )
         if failure:
-            if path.suffix == ".json" and path.exists():
+            if path.name == "architecture_execution.json" and path.exists():
                 last_valid.append(path.read_bytes())
             raise OSError("private persistence exception")
         replace(source, destination)
@@ -2727,8 +2800,21 @@ def test_architecture_required_writes_preserve_last_valid_execution(
     assert probe.main(architecture_arguments(configured_run)) == 1
     directory = run_dir / "mcp/architecture"
     assert directory.is_dir()
-    assert metadata_before == {
-        name: (run_dir / name).read_bytes() for name in metadata_before
+    assert (run_dir / "manifest.json").read_bytes() == metadata_before["manifest.json"]
+    after = runs.load_run_status(run_dir)
+    if failed_write == "initial":
+        assert (run_dir / "status.json").read_bytes() == metadata_before["status.json"]
+    else:
+        assert after.phases.architecture_mcp_extraction.state == "failed"
+        assert (
+            after.phases.architecture_mcp_extraction.error.type == "persistence_failure"
+        )
+    assert after.phases.model_dump(
+        mode="json", exclude={"architecture_mcp_extraction"}
+    ) == {
+        name: phase
+        for name, phase in json.loads(metadata_before["status.json"])["phases"].items()
+        if name != "architecture_mcp_extraction"
     }
     report = directory / "architecture_evidence_report.md"
     assert report.exists() == (failed_write == "removal")
@@ -2789,3 +2875,143 @@ def test_visual_summary_excludes_private_payload_and_keeps_partial_usage(
     }
     assert saved["calls"][-1]["visual"]["diagnostic"]["usage"] == {"prompt_tokens": 7}
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("state", ["running", "succeeded", "failed"])
+def test_architecture_nonpending_phase_rejects_before_reservation(
+    configured_run, agent_script, state
+):
+    run_dir = configured_run[0]
+    runs.mark_architecture_mcp_extraction_running(run_dir)
+    if state == "succeeded":
+        runs.mark_architecture_mcp_extraction_succeeded(run_dir)
+    elif state == "failed":
+        runs.mark_architecture_mcp_extraction_failed(
+            run_dir,
+            runs.PhaseFailure(type="tool_failure", message="Controlled failure."),
+        )
+    before = (run_dir / "status.json").read_bytes()
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    assert (run_dir / "status.json").read_bytes() == before
+    assert not (run_dir / "mcp").exists()
+    assert not agent_script.requests and not agent_script.calls
+
+
+@pytest.mark.parametrize(
+    "failed_write",
+    [
+        "start",
+        "start_conflict",
+        "success",
+        "success_removal",
+        "failure",
+        "failure_trace",
+    ],
+)
+def test_architecture_status_write_failures_preserve_evidence(
+    configured_run, agent_script, monkeypatch, failed_write, capsys
+):
+    run_dir = configured_run[0]
+    before = runs.load_run_status(run_dir)
+    manifest = (run_dir / "manifest.json").read_bytes()
+    baseline_report = run_dir / "architecture/architecture_evidence_report.md"
+    baseline_report.parent.mkdir()
+    baseline_report.write_bytes(b"owner report")
+    agent_script.responses = [
+        RuntimeError("private model failure")
+        if failed_write in {"failure", "failure_trace"}
+        else completion(text=MCP_NO_ASSUMPTIONS_REPORT)
+    ]
+    replace = persistence.os.replace
+    last_status = []
+
+    def fail_replace(source, destination):
+        path = Path(destination)
+        data = (
+            json.loads(Path(source).read_text(encoding="utf-8"))
+            if path.suffix == ".json"
+            else None
+        )
+        if path.name == "status.json":
+            phase = data["phases"]["architecture_mcp_extraction"]["state"]
+            failure = (
+                failed_write in {"start", "start_conflict"}
+                and phase == "running"
+                or failed_write in {"success", "success_removal"}
+                and phase == "succeeded"
+                or failed_write in {"failure", "failure_trace"}
+                and phase == "failed"
+            )
+            if failure:
+                if failed_write == "start_conflict":
+                    # Another invocation acquired the phase before our start failed.
+                    replace(source, destination)
+                last_status.append(path.read_bytes())
+                raise OSError("private status persistence failure")
+        if (
+            failed_write == "failure_trace"
+            and path.name == "architecture_execution.json"
+            and data["state"] == "failed"
+        ):
+            raise OSError("private trace persistence failure")
+        replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+    if failed_write == "success_removal":
+        unlink = Path.unlink
+
+        def fail_unlink(self, *args, **kwargs):
+            if self == run_dir / "mcp/architecture/architecture_evidence_report.md":
+                raise OSError("private removal failure")
+            return unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    after = runs.load_run_status(run_dir)
+    phase = after.phases.architecture_mcp_extraction
+    assert phase.state == (
+        "pending"
+        if failed_write == "start"
+        else "failed"
+        if failed_write in {"success", "success_removal"}
+        else "running"
+    )
+    if last_status and failed_write not in {"success", "success_removal"}:
+        assert (run_dir / "status.json").read_bytes() == last_status[-1]
+    saved = read_agent_trace(run_dir)
+    assert saved["state"] == (
+        "running" if failed_write == "failure_trace" else "failed"
+    )
+    assert saved["report_path"] is None
+    assert (run_dir / "mcp/architecture/architecture_evidence_report.md").exists() == (
+        failed_write == "success_removal"
+    )
+    if failed_write in {"start", "start_conflict"}:
+        assert not agent_script.requests and not agent_script.calls
+    else:
+        assert agent_script.closed and agent_script.model_closed
+        assert saved["model_requests"]
+    if failed_write in {"success", "success_removal"}:
+        assert saved["final_text"] == MCP_NO_ASSUMPTIONS_REPORT
+        assert saved["model_requests"][0]["response"]
+        assert phase.error.type == saved["termination_reason"] == "persistence_failure"
+    elif failed_write == "failure":
+        assert saved["termination_reason"] == "model_failure"
+        assert "failure status could not be persisted" in saved["diagnostic"]
+    if failed_write == "success_removal":
+        assert "report removal failed" in saved["diagnostic"]
+    assert after.phases.model_dump(
+        exclude={"architecture_mcp_extraction"}
+    ) == before.phases.model_dump(exclude={"architecture_mcp_extraction"})
+    assert (run_dir / "manifest.json").read_bytes() == manifest
+    assert baseline_report.read_bytes() == b"owner report"
+    output = capsys.readouterr()
+    assert (
+        "private"
+        not in output.out + output.err + json.dumps(saved) + phase.model_dump_json()
+    )
+    assert "Agent completed" not in output.out
+    if failed_write in {"failure", "failure_trace"}:
+        assert "failure status could not be persisted" in output.err
+    if failed_write == "failure_trace":
+        assert "diagnostics could not be persisted" in output.err

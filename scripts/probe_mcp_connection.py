@@ -38,8 +38,12 @@ from antenna_paper_extraction.mcp_architecture import (
     reserve_architecture_output,
 )
 from antenna_paper_extraction.runs import (
+    PhaseFailure,
     RunManifest,
     load_run_status,
+    mark_architecture_mcp_extraction_failed,
+    mark_architecture_mcp_extraction_running,
+    mark_architecture_mcp_extraction_succeeded,
     sha256_file,
 )
 
@@ -280,6 +284,12 @@ async def probe(
                 "VISUAL_INSPECTION_TIMEOUT_SECONDS"
             ),
         }
+    if (
+        persist_architecture
+        and load_run_status(run_dir).phases.architecture_mcp_extraction.state
+        != "pending"
+    ):
+        raise ProbeError("MCP architecture extraction can only start from pending.")
     trace = (
         ProbeTrace(run_dir, manifest)
         if configuration is None
@@ -296,7 +306,14 @@ async def probe(
     )
     print(f"Trace: {json.dumps(str(trace.path))}")
     operation = "startup"
+    phase_started = False
+    published_report: Path | None = None
     try:
+        if persist_architecture:
+            operation = "lifecycle start"
+            mark_architecture_mcp_extraction_running(run_dir)
+            phase_started = True
+            operation = "startup"
         # The null device provides an OS handle for child stderr without file I/O.
         with open(os.devnull, "w", encoding="utf-8") as errlog:  # noqa: ASYNC230
             async with QuietStdioServer(
@@ -344,16 +361,18 @@ async def probe(
         if persist_architecture:
             operation = "report publication"
             finalize_architecture_report(trace)
-    except asyncio.CancelledError:
-        try:
-            trace.finish("cancelled", "Probe cancelled.", reason="cancellation")
-        except ProbePersistenceError:
-            pass
-        raise
-    except Exception as error:  # noqa: BLE001 -- never display external error bodies
+            published_report = trace.path.parent / "architecture_evidence_report.md"
+            operation = "lifecycle success"
+            mark_architecture_mcp_extraction_succeeded(run_dir)
+    except (Exception, asyncio.CancelledError) as error:
+        cancelled = isinstance(error, asyncio.CancelledError)
         reason = (
-            "persistence_failure"
-            if trace.persistence_failed or isinstance(error, ProbePersistenceError)
+            "cancellation"
+            if cancelled
+            else "persistence_failure"
+            if operation in {"lifecycle start", "lifecycle success"}
+            or trace.persistence_failed
+            or isinstance(error, ProbePersistenceError)
             else "max_turns"
             if isinstance(error, MaxTurnsExceeded)
             else "model_failure"
@@ -367,7 +386,11 @@ async def probe(
             else "cleanup_failure"
         )
         diagnostic = (
-            str(error)
+            "Probe cancelled."
+            if cancelled
+            else "MCP architecture lifecycle persistence failed; execution stopped."
+            if operation in {"lifecycle start", "lifecycle success"}
+            else str(error)
             if isinstance(error, ProbeError)
             else "Agent turn budget exhausted."
             if reason == "max_turns"
@@ -376,15 +399,46 @@ async def probe(
             else f"MCP {operation} failed; check the executable and server configuration."
         )
         if (
-            trace.persistence_failed
+            not cancelled
+            and trace.persistence_failed
             and agent_model is not None
             and operation != "report publication"
         ):
             diagnostic = "MCP trace persistence failed; probe stopped."
+        if published_report is not None:
+            try:
+                published_report.unlink()
+            except OSError:
+                diagnostic += " Published report removal failed."
+        # Each file remains independently atomic; attempt both failure updates.
+        if phase_started:
+            try:
+                mark_architecture_mcp_extraction_failed(
+                    run_dir, PhaseFailure(type=reason, message=diagnostic)
+                )
+            except Exception:  # noqa: BLE001 -- exclude raw persistence errors
+                diagnostic += " MCP architecture failure status could not be persisted."
         try:
-            trace.finish("failed", diagnostic, reason=reason)
+            if published_report is not None:
+                data = copy.deepcopy(trace.data)
+                data.update(
+                    report_path=None,
+                    state="cancelled" if cancelled else "failed",
+                    finished_at=timestamp(),
+                    diagnostic=diagnostic,
+                    termination_reason=reason,
+                )
+                trace.save(data)
+            else:
+                trace.finish(
+                    "cancelled" if cancelled else "failed", diagnostic, reason=reason
+                )
         except ProbePersistenceError:
-            pass
+            diagnostic += " Execution failure diagnostics could not be persisted."
+        if cancelled:
+            if diagnostic != "Probe cancelled.":
+                print(diagnostic, file=sys.stderr)
+            raise
         raise ProbeError(diagnostic) from None
 
     # Report success only after the connection and child process have closed.

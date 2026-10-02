@@ -73,6 +73,8 @@ def test_create_run_copies_pdf_and_writes_manifest(tmp_path: Path) -> None:
     assert status_data["phases"]["source_preservation"]["finished_at"] is not None
     assert status_data["phases"]["source_preservation"]["error"] is None
 
+    assert status_data["phases"]["architecture_mcp_extraction"]["state"] == "pending"
+
     assert status_data["phases"]["page_rendering"] == {
         "state": "pending",
         "started_at": None,
@@ -377,6 +379,8 @@ def figure_ready_run(tmp_path: Path) -> Path:
 
     run_dir = runs.create_run(source_pdf, tmp_path / "runs")
 
+    runs.mark_architecture_mcp_extraction_running(run_dir)
+    runs.mark_architecture_mcp_extraction_succeeded(run_dir)
     runs.mark_page_rendering_running(run_dir)
     runs.mark_page_rendering_succeeded(run_dir)
     runs.mark_document_conversion_running(run_dir)
@@ -455,6 +459,10 @@ def test_figure_extraction_lifecycle_persists_transitions(
     assert completed.phases.source_preservation == initial.phases.source_preservation
     assert completed.phases.page_rendering == initial.phases.page_rendering
     assert completed.phases.document_conversion == initial.phases.document_conversion
+    assert (
+        completed.phases.architecture_mcp_extraction
+        == initial.phases.architecture_mcp_extraction
+    )
 
     with pytest.raises(ValueError, match="pending state"):
         runs.mark_figure_extraction_running(figure_ready_run)
@@ -537,6 +545,7 @@ def test_existing_transitions_preserve_other_phase_states(
     payload = current.model_dump(mode="json")
     payload["phases"]["figure_extraction"] = sentinel.model_dump(mode="json")
     payload["phases"]["architecture_extraction"] = sentinel.model_dump(mode="json")
+    payload["phases"]["architecture_mcp_extraction"] = sentinel.model_dump(mode="json")
 
     if phase_name == "page_rendering":
         payload["phases"]["document_conversion"] = sentinel.model_dump(mode="json")
@@ -563,6 +572,7 @@ def test_existing_transitions_preserve_other_phase_states(
 
     assert updated.phases.figure_extraction == sentinel
     assert updated.phases.architecture_extraction == sentinel
+    assert updated.phases.architecture_mcp_extraction == sentinel
 
     if phase_name == "page_rendering":
         assert updated.phases.document_conversion == sentinel
@@ -581,10 +591,16 @@ def test_old_status_defaults_architecture_to_pending(
     status_path = architecture_ready_run / "status.json"
     payload = json.loads(status_path.read_text(encoding="utf-8"))
     del payload["phases"]["architecture_extraction"]
+    del payload["phases"]["architecture_mcp_extraction"]
     status_path.write_text(json.dumps(payload), encoding="utf-8")
 
+    original_bytes = status_path.read_bytes()
     status = runs.load_run_status(architecture_ready_run)
 
+    assert status_path.read_bytes() == original_bytes
+    assert status.phases.architecture_mcp_extraction == runs.PhaseStatus(
+        state="pending"
+    )
     assert status.phases.architecture_extraction == runs.PhaseStatus(state="pending")
 
     runs.mark_architecture_extraction_running(architecture_ready_run)
@@ -667,3 +683,57 @@ def test_architecture_cannot_finish_before_starting(
             )
 
     assert runs.load_run_status(architecture_ready_run) == initial
+
+
+@pytest.mark.parametrize("outcome", ["succeeded", "failed"])
+def test_architecture_mcp_lifecycle_from_initialized_run(tmp_path: Path, outcome: str):
+    source = tmp_path / "paper.pdf"
+    write_test_pdf(source)
+    run_dir = runs.create_run(source, tmp_path / "runs")
+    initial = runs.load_run_status(run_dir)
+    failure = PhaseFailure(type="tool_failure", message="Controlled failure.")
+    with pytest.raises(ValueError, match="running state"):
+        if outcome == "succeeded":
+            runs.mark_architecture_mcp_extraction_succeeded(run_dir)
+        else:
+            runs.mark_architecture_mcp_extraction_failed(run_dir, failure)
+    assert runs.load_run_status(run_dir) == initial
+    running = runs.mark_architecture_mcp_extraction_running(run_dir)
+    assert runs.load_run_status(run_dir) == running
+    assert running.phases.architecture_mcp_extraction.state == "running"
+    assert running.phases.architecture_mcp_extraction.started_at.utcoffset() is not None
+    with pytest.raises(ValueError, match="pending state"):
+        runs.mark_architecture_mcp_extraction_running(run_dir)
+    completed = (
+        runs.mark_architecture_mcp_extraction_succeeded(run_dir)
+        if outcome == "succeeded"
+        else runs.mark_architecture_mcp_extraction_failed(run_dir, failure)
+    )
+    phase = completed.phases.architecture_mcp_extraction
+    assert runs.load_run_status(run_dir) == completed
+    assert phase.state == outcome
+    assert phase.started_at == running.phases.architecture_mcp_extraction.started_at
+    assert phase.finished_at >= phase.started_at
+    assert phase.finished_at.utcoffset() is not None
+    assert phase.error == (failure if outcome == "failed" else None)
+    assert completed.phases.model_dump(exclude={"architecture_mcp_extraction"}) == (
+        initial.phases.model_dump(exclude={"architecture_mcp_extraction"})
+    )
+    with pytest.raises(ValueError, match="pending state"):
+        runs.mark_architecture_mcp_extraction_running(run_dir)
+    assert runs.load_run_status(run_dir) == completed
+
+
+def test_architecture_mcp_requires_source_preservation(tmp_path: Path):
+    source = tmp_path / "paper.pdf"
+    write_test_pdf(source)
+    run_dir = runs.create_run(source, tmp_path / "runs")
+    payload = read_json(run_dir / "status.json")
+    payload["phases"]["source_preservation"] = PhaseStatus(state="pending").model_dump(
+        mode="json"
+    )
+    (run_dir / "status.json").write_text(json.dumps(payload), encoding="utf-8")
+    before = (run_dir / "status.json").read_bytes()
+    with pytest.raises(ValueError, match="Source preservation must succeed"):
+        runs.mark_architecture_mcp_extraction_running(run_dir)
+    assert (run_dir / "status.json").read_bytes() == before

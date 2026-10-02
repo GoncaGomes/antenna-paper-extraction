@@ -255,7 +255,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-07 - Integrate architecture execution with run lifecycle
 
-- **Status:** pending
+- **Status:** implemented
 - **Objective:** Track the MCP architecture path using existing run status.
 - **Narrow scope:** Allow execution from an initialized run and integrate the
   existing status mechanism locally to this path. Do not mark unexecuted
@@ -263,6 +263,39 @@ generation and general pipeline orchestration are outside this branch's scope.
 - **Acceptance checks:** Success, failure, cancellation and turn-budget
   exhaustion produce inspectable lifecycle outcomes; unrelated phase states
   and prior artefacts are preserved.
+- **Implemented:** Added independent `architecture_mcp_extraction` transitions
+  requiring only successful source preservation to start. Legacy statuses default
+  it to pending without rewriting or changing schema version. Existing rendering,
+  conversion, figure and baseline architecture transitions preserve this phase.
+  Baseline `architecture_extraction` still requires successful figures and retains
+  its own artefacts under `architecture/`; both approaches can run sequentially in
+  either order within one run.
+- **Persisted probe:** Only `--persist-architecture` updates the MCP phase.
+  Non-pending states and invalid configuration/output preflight are rejected before
+  reservation or external calls. The phase starts after initial execution JSON
+  persistence and before server startup; success follows durable publication and
+  execution metadata under `mcp/architecture/`. Failure and budget exhaustion mark
+  it failed; cancellation is failed globally and cancelled in the execution trace.
+  Probes without persistence remain status-neutral. There is no automatic reset,
+  retry or resume; the production CLI remains MCP-08.
+- **Persistence boundaries:** Execution/status writes remain separately atomic.
+  Both failure updates are attempted independently with controlled diagnostics.
+  A failed global success write returns failure and attempts removal of only this
+  invocation's report, clears available publication metadata and attempts global
+  failure. Raw responses and the reserved directory remain. Unavailable writers
+  can leave the last valid phase/trace running; failed removal can leave a report.
+- **Verification (2026-10-02):** Scripted SDK/model and in-memory MCP tests cover
+  independent success/failure transitions, legacy defaults without rewriting,
+  upstream/baseline preservation, both execution orders, cancellation, budget
+  exhaustion, structurally invalid report success, preflight/output neutrality and
+  start/success/failure status-write errors. Failure tests verify retained raw
+  responses, controlled diagnostics, independent failure updates, publication
+  rollback and failed rollback without touching baseline reports. Affected files
+  (`test_runs.py`, `test_mcp_connection.py`, `test_architecture.py`): 223 passed,
+  eight Windows symlink skips. Full local suite: 474 passed, 11 Windows symlink
+  skips. Ruff lint/format checks and `git diff --check` pass. All commands used the
+  existing environment with `uv run --no-sync`; no live inference, real external
+  server execution or dependency synchronization occurred.
 - **Suggested commit:** `feat(runs): track MCP architecture extraction lifecycle`
 
 ## MCP-08 - Expose the experimental CLI command
