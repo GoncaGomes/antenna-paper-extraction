@@ -20,6 +20,12 @@ from mcp.types import (
 from pypdf import PdfWriter
 
 from antenna_paper_extraction import persistence
+from antenna_paper_extraction.architecture_report import (
+    MCP_ARCHITECTURE_INSTRUCTIONS,
+    MCP_ARCHITECTURE_TASK,
+    validate_architecture_report,
+)
+from antenna_paper_extraction.mcp_agent import EVIDENCE_INSTRUCTIONS, EVIDENCE_TASK
 from antenna_paper_extraction.persistence import write_json
 from antenna_paper_extraction.runs import create_run, sha256_file
 
@@ -30,10 +36,11 @@ spec.loader.exec_module(probe)
 
 
 @pytest.fixture
-def configured_run(tmp_path):
+def configured_run(tmp_path, request):
     pdf = tmp_path / "paper with spaces.pdf"
     writer = PdfWriter()
-    writer.add_blank_page(width=72, height=72)
+    for _ in range(getattr(request, "param", 1)):
+        writer.add_blank_page(width=72, height=72)
     writer.write(pdf)
     run_dir = create_run(pdf, tmp_path / "runs with spaces")
     cwd = tmp_path / "external server with spaces"
@@ -1084,6 +1091,9 @@ def test_agent_multiple_rounds_and_sequential_tools(configured_run, agent_script
     }
     assert saved["usage"]["total_tokens"] == 45
     assert saved["final_text"].startswith("Page 1:")
+    assert saved["configuration"]["agent_task"] == "geometry"
+    assert saved["instructions"] == EVIDENCE_INSTRUCTIONS
+    assert saved["task"] == EVIDENCE_TASK
     assert agent_script.closed and agent_script.model_closed
     assert agent_script.max_active == 1
     assert [c["name"] for c in agent_script.calls] == [
@@ -1385,6 +1395,7 @@ def test_agent_missing_endpoint_settings_before_trace(
         ("--max-turns", "0"),
         ("--max-turns", "-1"),
         ("--max-turns", "1.5"),
+        ("--agent-task", "unknown"),
     ],
 )
 def test_agent_invalid_cli_options(configured_run, option, value):
@@ -1896,6 +1907,466 @@ def test_visual_required_write_failure_stops_sdk(
     assert "visual" not in saved["calls"][-1]
     assert ("response" in saved["calls"][-1]) == (failed_write == 8)
     assert agent_script.closed and agent_script.model_closed
+
+
+MCP_ASSUMED_REPORT = """\
+## 1. Selected antenna
+
+- A001 [Reported] Design B is the final simulated rectangular patch design.
+  Evidence: Physical PDF page 1, section 2 (Design).
+
+Fabrication is not established. This working reconstruction is supported with
+explicitly assumed completion details (H001); it is not uniquely established.
+
+## 2. Components, materials and layers
+
+- A002 [Reported] The patch and ground are copper on a 1.6 mm dielectric layer
+  with relative permittivity 4.4.
+  Evidence: Physical PDF page 1, section 2 (Design).
+
+Conductor thickness is assumed to be 0.035 mm for both conductors (H001).
+
+## 3. Geometry, dimensions and feeding
+
+- A003 [Reported] The final patch length L is 12 mm and width W is 8 mm;
+  the substrate and ground are 20 mm square, with a central coaxial feed.
+  Evidence: Physical PDF page 1, section 2 (Design), Fig. 1 caption.
+
+- A004 [Visual] A visual model observation places the L dimension arrows at
+  the two patch edges in panel (a). The crop covers only the first source page;
+  the W endpoints are unreadable and the second panel was not inspected.
+  Evidence: asset_id segment:2/figure:1, inspection_id
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, physical PDF pages 1–2, rendered page 1.
+
+The conductor solids use the assumed 0.035 mm thickness (H001).
+
+## 4. Derivations and conflicts
+
+- A005 [Derived] The rectangular patch footprint is 96 mm²: L × W = 12 × 8,
+  using A003. This does not establish feed-hole or connector dimensions.
+  Evidence: A003, rectangular area relation; nominal dimensions only.
+
+No source conflict was identified in the acquired passages.
+
+## 5. Reconstruction gaps
+
+Feed-hole and connector dimensions were not found in the acquired sources.
+Visual coverage was partial; an explicit page:1 inspection was unavailable and
+supports no additional positive observation. Unacquired pages remain a limitation.
+
+### Proposed completion assumptions
+
+| ID | Missing detail | Proposed choice | Basis and uncertainty | Affected geometry |
+| --- | --- | --- | --- | --- |
+| H001 | Copper thickness | 0.035 mm | Practical modelling choice consistent with A002; no direct paper support. The paper does not establish this value. Alternatives change conductor loss and solid thickness. | Patch and ground of Design B |
+"""
+
+MCP_NO_ASSUMPTIONS_REPORT = """\
+## 1. Selected antenna
+
+- A001 [Reported] The final simulated design is a straight centre-fed dipole.
+  Evidence: Physical PDF page 1, section 2 (Design).
+
+The working reconstruction is supported without completion assumptions.
+Fabrication and measurement are not established.
+
+## 2. Components, materials and layers
+
+- A002 [Reported] Two cylindrical copper arms are in free space, without layers.
+  Evidence: Physical PDF page 1, section 2 (Design).
+
+## 3. Geometry, dimensions and feeding
+
+- A003 [Reported] Each arm is 15 mm long with radius 0.5 mm; the collinear arms
+  have a 1 mm gap, with an ideal simulation port across the gap.
+  Evidence: Physical PDF page 1, section 2 (Design).
+
+## 4. Derivations and conflicts
+
+- A004 [Derived] The end-to-end span is 31 mm, from 15 + 1 + 15 using A003.
+  Evidence: A003; sum of the two arm lengths and intervening gap.
+
+No reconstruction-relevant conflict was identified.
+
+## 5. Reconstruction gaps
+
+### Proposed completion assumptions
+
+No completion assumptions are needed for the described simulation geometry.
+The acquired text does not establish a physical connector or fabricated version.
+"""
+
+MCP_UNAVAILABLE_REPORT = (
+    MCP_NO_ASSUMPTIONS_REPORT
+    + """
+An inspection of page:1 was unavailable: no stored region was available.
+No positive visual observation is supported by this failure; the geometry above
+is grounded in the acquired paper text.
+"""
+)
+
+
+@pytest.mark.parametrize("agent_task", ["geometry", "architecture"])
+def test_explicit_agent_task_texts_and_default_budget(
+    configured_run, agent_script, agent_task
+):
+    final = MCP_NO_ASSUMPTIONS_REPORT if agent_task == "architecture" else "Geometry."
+    agent_script.responses = [completion(text=final)]
+    # Omit --max-turns to exercise the actual CLI default in both modes.
+    argv = arguments(configured_run) + [
+        "--agent-model",
+        "explicit-model",
+        "--agent-task",
+        agent_task,
+    ]
+    assert probe.main(argv) == 0
+    saved = read_agent_trace(configured_run[0])
+    expected = (
+        (MCP_ARCHITECTURE_INSTRUCTIONS, MCP_ARCHITECTURE_TASK)
+        if agent_task == "architecture"
+        else (EVIDENCE_INSTRUCTIONS, EVIDENCE_TASK)
+    )
+    assert (saved["instructions"], saved["task"]) == expected
+    assert saved["configuration"]["agent_task"] == agent_task
+    assert saved["configuration"]["max_turns"] == 8
+    messages = agent_script.requests[0]["messages"]
+    assert messages[0] == {"role": "system", "content": expected[0]}
+    assert messages[1] == {"role": "user", "content": expected[1]}
+    assert saved["model_requests"][0]["request"]["messages"] == messages
+    assert saved["final_text"] == final
+    if agent_task == "architecture":
+        assert validate_architecture_report(saved["final_text"]) == ()
+
+
+@pytest.mark.parametrize("entry", ["cli", "direct"])
+def test_architecture_requires_model_before_startup(
+    configured_run, agent_script, monkeypatch, entry, capsys
+):
+    monkeypatch.setattr(
+        probe, "verify_run", lambda *args: pytest.fail("Unexpected run preflight")
+    )
+    if entry == "cli":
+        assert (
+            probe.main(arguments(configured_run) + ["--agent-task", "architecture"])
+            == 1
+        )
+        assert "requires --agent-model" in capsys.readouterr().err
+    else:
+        with pytest.raises(probe.ProbeError, match="requires --agent-model"):
+            asyncio.run(probe.probe(*configured_run, agent_task="architecture"))
+    assert not (configured_run[0] / "mcp").exists()
+    assert not agent_script.requests and not agent_script.calls
+
+
+def test_explicit_geometry_connection_is_model_free(configured_run, agent_script):
+    assert probe.main(arguments(configured_run) + ["--agent-task", "geometry"]) == 0
+    assert not agent_script.requests
+    assert len(agent_script.calls) == 1
+    assert agent_script.closed and not agent_script.model_closed
+    assert "model_requests" not in read_trace(configured_run[0])
+
+
+@pytest.mark.parametrize("configured_run", [2], indirect=True)
+def test_architecture_iterative_acquisition_and_report(
+    configured_run, agent_script, visual_case
+):
+    run_dir = configured_run[0]
+    metadata_before = {
+        name: (run_dir / name).read_bytes() for name in ("manifest.json", "status.json")
+    }
+    inspected, diagnostic = visual_case()
+    write_json(diagnostic_path(configured_run, diagnostic), diagnostic)
+    deterministic = json.loads(json.dumps(inspected))
+    deterministic["visual"] = {
+        "status": "not_requested",
+        "source_page_ids": ["page:1", "page:2"],
+        "rendered_pages": [],
+        "visual_coverage": "none",
+        "limitations": [],
+    }
+    unavailable, _ = visual_case("unavailable", None)
+    unavailable.update(id="page:1", kind="page", first_page=1, last_page=1)
+    unavailable["visual"].update(
+        source_page_ids=["page:1"],
+        rendered_pages=[],
+        visual_coverage="none",
+        render={"available": False},
+        limitations=[],
+    )
+    document_id = inspected["document_id"]
+    section = {"id": 2, "number": "2", "title": "Design", "level": 1, "page": 1}
+    query = {"query": "patch", "first_page": 1, "last_page": 2}
+    filters = {"kind": "figure", "first_page": 1, "last_page": 2}
+    pages = {"first_page": 1, "last_page": 2}
+    cursors = {
+        name: f"opaque-{name}-+/==" for name in ("search", "section", "pages", "assets")
+    }
+    first_text = "Design B is the final simulated rectangular patch design."
+    second_text = (
+        "Patch and ground are copper on a 1.6 mm dielectric layer, permittivity 4.4. "
+        "L=12 mm, W=8 mm; substrate and ground are 20 mm square; central coaxial feed."
+    )
+    search = {
+        "document_id": document_id,
+        "query": "patch",
+        "pages": "1–2",
+        "total_hits": 2,
+        "hits": [
+            {
+                "paragraph_id": 10,
+                "page": 1,
+                "section_id": 2,
+                "section_title": "Design",
+                "snippet": first_text,
+            }
+        ],
+        "next_cursor": cursors["search"],
+    }
+    search_end = {
+        **search,
+        "next_cursor": None,
+        "hits": [
+            {
+                "paragraph_id": 11,
+                "page": 1,
+                "section_id": 2,
+                "section_title": "Design",
+                "snippet": second_text,
+            }
+        ],
+    }
+    text_chunk = {
+        "document_id": document_id,
+        "fragments": [{"page": 1, "text": first_text}],
+    }
+    text_end = {
+        "document_id": document_id,
+        "next_cursor": None,
+        "fragments": [{"page": 1, "text": second_text}],
+    }
+    catalog = {
+        "document_id": document_id,
+        "total_assets": 2,
+        "counts": {"figure": 2},
+        "items": [
+            {
+                "id": "segment:2/figure:1",
+                "label": "Fig. 1",
+                "kind": "figure",
+                "first_page": 1,
+                "last_page": 2,
+                "caption_preview": "Design B.",
+                "cited_count": 1,
+                "region_available": True,
+            }
+        ],
+        "next_cursor": cursors["assets"],
+    }
+    catalog_end = {
+        **catalog,
+        "next_cursor": None,
+        "items": [
+            {
+                "id": "segment:2/figure:2",
+                "label": "Fig. 2",
+                "kind": "figure",
+                "first_page": 2,
+                "last_page": 2,
+                "caption_preview": "Results.",
+                "cited_count": 1,
+                "region_available": False,
+            }
+        ],
+    }
+    overview = {
+        "paper": "paper with spaces.pdf",
+        "document_id": document_id,
+        "pdf_pages": 2,
+        "outline": [section],
+        "warnings": [],
+    }
+    payloads = [
+        overview,
+        search,
+        {**text_chunk, "section": section, "next_cursor": cursors["section"]},
+        {**text_chunk, "next_cursor": cursors["pages"]},
+        catalog,
+        search_end,
+        {**text_end, "section": section},
+        text_end,
+        catalog_end,
+        deterministic,
+        inspected,
+        unavailable,
+    ]
+    agent_script.tool_results = [asset_result(payload) for payload in payloads]
+    expected_calls = [
+        ("get_paper_overview", {}),
+        ("search_paper", query),
+        ("read_section", {"section_id": 2}),
+        ("read_pages", pages),
+        ("list_assets", filters),
+        ("search_paper", {**query, "cursor": cursors["search"]}),
+        ("read_section", {"section_id": 2, "cursor": cursors["section"]}),
+        ("read_pages", {**pages, "cursor": cursors["pages"]}),
+        ("list_assets", {**filters, "cursor": cursors["assets"]}),
+        ("get_asset", {"asset_id": catalog["items"][0]["id"]}),
+        (
+            "get_asset",
+            {"asset_id": catalog["items"][0]["id"], "question": "Read dimensions."},
+        ),
+        (
+            "get_asset",
+            {"asset_id": "page:1", "question": "Resolve W endpoints on the full page."},
+        ),
+    ]
+    # Multiple tool calls in a model response must still execute sequentially.
+    rounds = [
+        expected_calls[:1],
+        expected_calls[1:5],
+        expected_calls[5:9],
+        expected_calls[9:10],
+        expected_calls[10:11],
+        expected_calls[11:],
+    ]
+    agent_script.responses = [
+        completion(
+            *[(f"sdk-{i}-{j}", name, args) for j, (name, args) in enumerate(calls)]
+        )
+        for i, calls in enumerate(rounds)
+    ] + [completion(text=MCP_ASSUMED_REPORT)]
+    assert (
+        probe.main(agent_arguments(configured_run) + ["--agent-task", "architecture"])
+        == 0
+    )
+    saved = read_agent_trace(run_dir)
+    assert [
+        (call["name"], call["arguments"]) for call in agent_script.calls[1:]
+    ] == expected_calls
+    for call, payload in zip(saved["calls"][1:], payloads, strict=True):
+        assert json.loads(call["response"]["content"][0]["text"]) == payload
+    # The next effective model request contains the complete returned evidence.
+    for request_index, payload_index in ((2, 1), (2, 2), (2, 3), (2, 4), (6, 11)):
+        messages = agent_script.requests[request_index]["messages"]
+        assert any(
+            message["role"] == "tool"
+            and any(
+                part["type"] == "text"
+                and json.loads(part["text"]) == payloads[payload_index]
+                for part in message["content"]
+            )
+            for message in messages
+        )
+    visual = saved["calls"][-2]["visual"]
+    assert visual["asset_id"] == catalog["items"][0]["id"]
+    assert visual["inspection_id"] == diagnostic["inspection_id"]
+    assert visual["diagnostic"]["lookup"] == "available"
+    assert visual["visual_coverage"] == "partial" and visual["limitations"]
+    assert saved["calls"][-1]["visual"]["status"] == "unavailable"
+    assert saved["calls"][-1]["visual"]["successful_observations"] == 0
+    assert saved["calls"][-3]["visual"]["inspection_requested"] is False
+    assert agent_script.max_active == 1
+    assert not agent_script.responses and not agent_script.tool_results
+    assert saved["counts"] == {
+        "model_requests": 7,
+        "model_responses": 7,
+        "mcp_calls": 13,
+    }
+    assert saved["final_text"] == MCP_ASSUMED_REPORT
+    assert validate_architecture_report(saved["final_text"]) == ()
+    assert agent_script.closed and agent_script.model_closed
+    assert saved["termination_reason"] == "final_answer"
+    assert metadata_before == {
+        name: (run_dir / name).read_bytes() for name in metadata_before
+    }
+    assert not (run_dir / "architecture").exists()
+    assert {path.name for path in (run_dir / "mcp").iterdir()} == {
+        "inspections",
+        next((run_dir / "mcp").glob("probe_agent_*.json")).name,
+    }
+
+
+def test_architecture_unavailable_inspection_preserves_text_report(
+    configured_run, agent_script, visual_case
+):
+    payload, _ = visual_case("unavailable", None)
+    payload.update(id="page:1", kind="page", first_page=1, last_page=1)
+    payload["visual"].update(
+        source_page_ids=["page:1"],
+        rendered_pages=[],
+        visual_coverage="none",
+        render={"available": False},
+        limitations=[],
+        reason="No stored region is available.",
+    )
+    payload["content"] = (
+        "The final simulated design is a centre-fed dipole with two cylindrical "
+        "copper arms in free space, each 15 mm long and 0.5 mm radius, collinear "
+        "with a 1 mm gap and an ideal simulation port across the gap."
+    )
+    agent_script.tool_result = asset_result(payload)
+    agent_script.responses = [
+        completion(
+            (
+                "sdk-page",
+                "get_asset",
+                {"asset_id": "page:1", "question": "Inspect the feed gap."},
+            )
+        ),
+        completion(text=MCP_UNAVAILABLE_REPORT),
+    ]
+    assert (
+        probe.main(agent_arguments(configured_run) + ["--agent-task", "architecture"])
+        == 0
+    )
+    saved = read_agent_trace(configured_run[0])
+    assert saved["final_text"] == MCP_UNAVAILABLE_REPORT
+    assert validate_architecture_report(saved["final_text"]) == ()
+    assert saved["calls"][-1]["visual"]["status"] == "unavailable"
+    assert saved["visual_accounting"]["successful_observations"] == 0
+    assert len(agent_script.calls) == 2  # No retry or automatic page fallback.
+    assert agent_script.closed and agent_script.model_closed
+
+
+def test_architecture_budget_exhaustion_preserves_partial_trace(
+    configured_run, agent_script
+):
+    agent_script.responses = [
+        completion(("sdk-section", "read_section", {"section_id": 2})),
+    ]
+    agent_script.tool_result = asset_result(
+        {
+            "section": {
+                "id": 2,
+                "number": "2",
+                "title": "Design",
+                "level": 1,
+                "page": 1,
+            },
+            "fragments": [{"page": 1, "text": "Patch length L=12 mm."}],
+            "next_cursor": "opaque-section-+/==",
+        }
+    )
+    assert (
+        probe.main(
+            agent_arguments(configured_run, 1) + ["--agent-task", "architecture"]
+        )
+        == 1
+    )
+    saved = read_agent_trace(configured_run[0])
+    assert saved["state"] == "failed" and saved["termination_reason"] == "max_turns"
+    assert saved["configuration"]["max_turns"] == 1
+    assert saved["final_text"] is None
+    assert (
+        saved["model_requests"][0]["response"]["choices"][0]["finish_reason"]
+        == "tool_calls"
+    )
+    assert saved["calls"][-1]["response"] == agent_script.tool_result.model_dump(
+        mode="json", by_alias=True
+    )
+    assert len(agent_script.requests) == 1 and len(agent_script.calls) == 2
+    assert agent_script.closed and agent_script.model_closed
+    assert not (configured_run[0] / "architecture").exists()
 
 
 def test_visual_summary_excludes_private_payload_and_keeps_partial_usage(

@@ -52,8 +52,10 @@ pipeline orchestration remain unimplemented and outside this branch's scope.
 
 The `exp/architecture-mcp` branch will compare iterative MCP evidence acquisition
 with the existing extraction path. Its implementation tasks are in
-[PLAN.md](PLAN.md). The deterministic connection probe and a narrow geometry
-evidence agent are implemented; architecture reports through MCP remain planned.
+[PLAN.md](PLAN.md). The deterministic connection probe, narrow geometry evidence
+task and MCP architecture instruction set are implemented. The probe can generate
+architecture report text; separate report/execution artefacts remain deferred
+to MCP-06, and live scientific evaluation is pending.
 
 - Reuse `init-run` to preserve one PDF and establish run identity, then launch
   an external MCP server through stdio, bound to that preserved PDF.
@@ -85,14 +87,14 @@ MCP architecture artefacts remain planned:
 | `mcp/images/...` | Server image assets |
 | `mcp/inspections/...` | Visual inspection diagnostics |
 | `mcp/probe_connection_<unique-id>.json` | Incremental deterministic connection-probe trace |
-| `mcp/probe_agent_<unique-id>.json` | Narrow geometry agent: ordered model/MCP trace and final text |
+| `mcp/probe_agent_<unique-id>.json` | Geometry or architecture probe: ordered model/MCP trace and `final_text` |
 | `architecture/architecture_evidence_report.md` | MCP-derived evidence report |
 | `architecture/architecture_execution.json` | MCP execution and incremental trace |
 
 The architecture filenames already exist in the baseline; producing them through
-MCP is planned. The probe accepts explicit server executable and working-directory
-paths and optional agent mode; there is no MCP architecture execution path or
-production CLI command yet. Tool calls,
+MCP is deferred to MCP-06. The probe accepts explicit server executable and
+working-directory paths and optional geometry or architecture agent tasks;
+there is no production MCP architecture CLI command yet. Tool calls,
 principal-model requests and confirmed visual-model calls are counted separately;
 a `get_asset` call or supplied question does not prove a visual-model request
 occurred, particularly for unavailable evidence or configuration failures.
@@ -198,6 +200,40 @@ uv run --no-sync python scripts/probe_mcp_connection.py `
   --max-turns 8
 ```
 
+The probe-only selector `--agent-task {geometry,architecture}` defaults to
+`geometry`, preserving the existing instructions and task. Architecture requires
+`--agent-model`; selecting it without a model fails before server startup or trace
+creation. It uses a separate complete MCP instruction set, with the same five
+report headings and A-series `Reported`, `Visual` and `Derived` claims. Visual
+claims cite the exact asset ID, returned inspection ID and available page
+provenance, retaining inspection limitations. Proposed completion assumptions
+use H-series IDs in a section 5 table, with justification and uncertainty, and
+are explicitly marked as assumed wherever used in the working reconstruction.
+They are ordinary report content, distinct from extracted evidence claims.
+The baseline architecture instructions and extraction behaviour are unchanged.
+
+To opt into architecture investigation with a larger finite budget, use an
+existing initialized run and an explicit deployed principal model identifier:
+
+```powershell
+uv run --no-sync python scripts/probe_mcp_connection.py `
+  --run-dir "C:\dev\antenna-paper-extraction\runs\<existing-initialized-run>" `
+  --agent-model "<deployed-principal-model-id>" `
+  --agent-task architecture `
+  --max-turns 80 `
+  --mcp-executable "C:\dev\reviewer-mcp\.venv\Scripts\mcp-pdf-ingestion.exe" `
+  --mcp-cwd "C:\dev\reviewer-mcp"
+```
+
+Architecture selection does not increase the default budget of 8. Both tasks
+persist their exact selected instructions, Runner input and task identity in the
+probe trace. The returned report is stored unchanged in its existing `final_text`
+field, without runtime structural rejection, semantic validation or automatic
+correction. Separate architecture report/execution files remain MCP-06 work.
+Scripted local tests establish integration and structural compatibility, including
+H-series tables; live model policy compliance and scientific accuracy remain
+pending explicit evaluation.
+
 Only agent mode loads the current directory's `.env`, with process values taking
 precedence, before constructing the trace. It requires `SKYNET_BASE_URL` and
 `SKYNET_API_KEY`; no principal model is inferred from environment variables.
@@ -236,7 +272,8 @@ the last valid trace can retain `state=running`, a `started` record or final tex
 without a terminal state. The controlled CLI diagnostic identifies persistence
 failure. Truncated/unusable responses are preserved and fail explicitly. Exit
 codes are 0 for normal completion, 1 for failure and 130 for cancellation. Neither
-probe mode changes manifest/status files or produces an architecture report.
+probe mode changes manifest/status files or creates separate architecture
+report/execution files; architecture report text stays in `final_text`.
 
 After the complete `get_asset` response is durable, its call record gains a
 `visual` summary, saved before SDK continuation. It retains returned asset ID,

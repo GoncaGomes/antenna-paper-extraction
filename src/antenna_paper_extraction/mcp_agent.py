@@ -1,4 +1,4 @@
-"""Local recording and SDK execution for the narrow MCP evidence probe."""
+"""Local recording and SDK execution for MCP evidence probes."""
 
 import asyncio
 import copy
@@ -137,7 +137,13 @@ class ProbeTrace:
     """Small local trace, committed only through the existing atomic writer."""
 
     def __init__(
-        self, run_dir: Path, manifest: RunManifest, *, configuration: dict | None = None
+        self,
+        run_dir: Path,
+        manifest: RunManifest,
+        *,
+        configuration: dict | None = None,
+        instructions: str = EVIDENCE_INSTRUCTIONS,
+        task: str = EVIDENCE_TASK,
     ):
         trace_id = uuid4().hex
         mode = "agent" if configuration is not None else "connection"
@@ -157,8 +163,8 @@ class ProbeTrace:
             self.data.update(
                 mode="agent",
                 configuration=configuration,
-                instructions=EVIDENCE_INSTRUCTIONS,
-                task=EVIDENCE_TASK,
+                instructions=instructions,
+                task=task,
                 model_requests=[],
                 events=[],
                 final_text=None,
@@ -572,8 +578,8 @@ async def run_evidence_agent(
     ) as client:
         client.record_to(trace)
         agent = Agent(
-            name="geometry-evidence-probe",
-            instructions=EVIDENCE_INSTRUCTIONS,
+            name=f"{trace.data['configuration']['agent_task']}-evidence-probe",
+            instructions=trace.data["instructions"],
             model=OpenAIChatCompletionsModel(model=model_name, openai_client=client),
             mcp_servers=[server],
             model_settings=ModelSettings(
@@ -583,7 +589,7 @@ async def run_evidence_agent(
         )
         result = await Runner.run(
             agent,
-            EVIDENCE_TASK,
+            trace.data["task"],
             max_turns=max_turns,
             hooks=ToolLinkHooks(trace),
             run_config=RunConfig(

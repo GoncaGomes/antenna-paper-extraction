@@ -1,4 +1,4 @@
-"""Explicit connection or narrow evidence-agent probe for one preserved run."""
+"""Explicit connection or evidence-agent probe for one preserved run."""
 
 import argparse
 import asyncio
@@ -20,7 +20,13 @@ from mcp.client.stdio import get_default_environment
 from mcp.types import CallToolResult
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from antenna_paper_extraction.architecture_report import (
+    MCP_ARCHITECTURE_INSTRUCTIONS,
+    MCP_ARCHITECTURE_TASK,
+)
 from antenna_paper_extraction.mcp_agent import (
+    EVIDENCE_INSTRUCTIONS,
+    EVIDENCE_TASK,
     ProbeError,
     ProbePersistenceError,
     ProbeTrace,
@@ -216,8 +222,18 @@ async def probe(
     mcp_cwd: Path,
     *,
     agent_model: str | None = None,
+    agent_task: str = "geometry",
     max_turns: int = 8,
 ) -> None:
+    if agent_task not in {"geometry", "architecture"}:
+        raise ProbeError("agent_task must be geometry or architecture.")
+    if agent_task == "architecture" and agent_model is None:
+        raise ProbeError("Architecture selection requires --agent-model.")
+    instructions, task = (
+        (MCP_ARCHITECTURE_INSTRUCTIONS, MCP_ARCHITECTURE_TASK)
+        if agent_task == "architecture"
+        else (EVIDENCE_INSTRUCTIONS, EVIDENCE_TASK)
+    )
     run_dir = run_dir.resolve()
     manifest, pdf, digest = verify_run(run_dir)
     mcp_executable, mcp_cwd = mcp_executable.resolve(), mcp_cwd.resolve()
@@ -240,6 +256,7 @@ async def probe(
             if not os.environ.get(name, "").strip():
                 raise ProbeError(f"Missing required environment variable: {name}")
         configuration = {
+            "agent_task": agent_task,
             "model": agent_model,
             "max_turns": max_turns,
             "model_timeout_seconds": 600,
@@ -257,7 +274,13 @@ async def probe(
     trace = (
         ProbeTrace(run_dir, manifest)
         if configuration is None
-        else ProbeTrace(run_dir, manifest, configuration=configuration)
+        else ProbeTrace(
+            run_dir,
+            manifest,
+            configuration=configuration,
+            instructions=instructions,
+            task=task,
+        )
     )
     print(f"Trace: {json.dumps(str(trace.path))}")
     operation = "startup"
@@ -380,6 +403,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mcp-executable", type=Path, required=True)
     parser.add_argument("--mcp-cwd", type=Path, required=True)
     parser.add_argument("--agent-model", type=nonblank_model)
+    parser.add_argument(
+        "--agent-task", choices=("geometry", "architecture"), default="geometry"
+    )
     parser.add_argument("--max-turns", type=positive_turns, default=8)
     args = parser.parse_args(argv)
     # SDK logs can include tool/error bodies. This standalone probe emits only
@@ -393,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.mcp_executable,
                 args.mcp_cwd,
                 agent_model=args.agent_model,
+                agent_task=args.agent_task,
                 max_turns=args.max_turns,
             )
         )

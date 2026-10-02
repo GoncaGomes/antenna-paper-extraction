@@ -161,16 +161,49 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-05 - Adapt architecture instructions to MCP evidence
 
-- **Status:** pending
+- **Status:** implemented and tested
 - **Objective:** Exercise the existing scientific/report conventions through MCP.
 - **Narrow scope:** Adapt instructions for iterative acquisition, pagination,
   textual search, exact asset IDs and explicit physical-page inspection.
   Preserve report sections and claim conventions; distinguish original paper
   content from learned visual observations and define traceable evidence
-  references without redesigning the final schema.
+  references without redesigning the final schema. Explicit H-series completion
+  assumptions may supply missing reconstruction details, with origin,
+  justification and uncertainty, separately from supported A-series claims.
 - **Acceptance checks:** Exercise the instructions through the existing agent
   probe; verify report conventions, paginated acquisition and evidence links
   that distinguish textual sources from visual diagnostics.
+- **Implemented:** `architecture_report.py` defines the agreed independent MCP
+  instructions and task, reusing `REPORT_SECTIONS` without changing the baseline
+  prompt or structural validator. The probe-only `--agent-task` selector defaults
+  to `geometry`; `architecture` requires an explicit principal model before any
+  startup or trace creation. One selected instruction/task pair is persisted and
+  used by the Agent and Runner, with task identity in trace configuration.
+  The configurable turn budget still defaults to 8. Report text stays unchanged
+  in the probe's `final_text`; there is no runtime report rejection, scientific
+  validation, automatic correction or new final schema. Existing sequential
+  execution, zero retries, timeouts, tracing and MCP-04 provenance are preserved.
+- **Verification (2026-10-01):** Scripted Chat Completions and in-memory MCP transport use the
+  installed SDK Runner to exercise selection/persistence, model-free connection
+  mode, pre-startup model requirements, pagination with unchanged cursors and
+  original query/filter/section context, exact catalog IDs, deterministic assets,
+  linked partial visual inspection and explicit unavailable page inspection.
+  Representative reports with A-series claims and an H001 table, no assumptions,
+  or unavailable inspection pass the unchanged structural validator and remain
+  unmodified in `final_text`. Turn exhaustion retains partial traces and cleanup;
+  manifest/status bytes remain unchanged and no separate architecture files are
+  created. Existing regression tests cover termination, redaction and required
+  persistence boundaries. Focused probe/report suite: 148 passed, five Windows
+  symlink skips. Full local suite: 426 passed, eight symlink skips, no failures.
+  Ruff lint, formatting checks and `git diff --check` passed, using the existing
+  environment with `uv run --no-sync`.
+- **Limitations and deferred work:** Scripted reports demonstrate integration and
+  structural compatibility, not live policy compliance or correct geometry.
+  Live scientific evaluation remains pending. Separate report/execution artefacts
+  remain MCP-06; lifecycle, production CLI and final JSON are outside this task.
+  No live inference, real server startup, dependency synchronization/upgrades or
+  external repository changes were performed. No correction to the agreed
+  runtime wording was needed.
 - **Suggested commit:** `feat(architecture): define MCP evidence acquisition instructions`
 
 ## MCP-06 - Produce the architecture report and execution artefact
