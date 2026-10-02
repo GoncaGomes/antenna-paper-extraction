@@ -208,7 +208,7 @@ generation and general pipeline orchestration are outside this branch's scope.
 
 ## MCP-06 - Produce the architecture report and execution artefact
 
-- **Status:** pending
+- **Status:** implemented (local scripted verification; scientific acceptance pending)
 - **Objective:** Turn the exercised MCP agent into architecture-report execution.
 - **Narrow scope:** Persist `architecture_evidence_report.md` and
   `architecture_execution.json`, retaining diagnostic structural validation and
@@ -217,6 +217,40 @@ generation and general pipeline orchestration are outside this branch's scope.
 - **Acceptance checks:** Scripted clients verify report generation, structural
   diagnostics, existing-output rejection and failure preservation from an
   initialized run without converted Markdown or baseline figure artefacts.
+- **Implemented:** The development-only `--persist-architecture` probe flag
+  requires the architecture task and an explicit nonblank model. After local
+  preflight, exclusive reservation of `mcp/architecture/` rejects every existing
+  entry, including empty directories and broken symlinks. `ProbeTrace` starts
+  directly in `mcp/architecture/architecture_execution.json`, preserving the same
+  incremental model/MCP records, raw responses, counts and relative diagnostics
+  without a duplicate probe JSON. After successful execution and cleanup,
+  structural diagnostics are saved before atomic publication of the redacted
+  final text as `mcp/architecture/architecture_evidence_report.md`. Non-empty
+  structurally invalid reports are published diagnostically; no scientific
+  validation or repair is performed. Success requires durable publication
+  metadata. Failures preserve the output reservation and last valid trace; final
+  metadata failure attempts to remove only this invocation's published report.
+- **Verification (2026-10-02):** Scripted Chat Completions, in-memory MCP
+  transport and the installed SDK Runner cover valid/invalid report publication,
+  unchanged H-series content, relative inspection references, initial null
+  metadata, preflight before reservation, existing-output rejection, exclusive
+  reservation races, preserved MCP/baseline data and failure retention. Model,
+  tool, unusable/truncated completion, budget, cancellation, startup, discovery,
+  identity, cleanup and required-write failures preserve evidence without durable
+  report success. Final metadata failure removes only the new report when
+  possible; removal/diagnostic failures return failure and retain the last valid
+  JSON. Manifest/status bytes remain unchanged. Focused probe/report/persistence
+  suite: 198 passed, eight Windows symlink skips. Full local suite: 462 passed,
+  11 Windows symlink skips. Ruff lint, formatting and `git diff --check` pass.
+  Representative synthetic reports and execution metadata were inspected;
+  Markdown equals persisted `final_text`, including redaction.
+- **Boundaries:** No rendering, conversion or baseline figure prerequisites;
+  existing MCP and baseline architecture data are permitted. Default budget 8,
+  instructions, six tools, sequential execution, zero retries and timeouts remain
+  unchanged. Manifest/status and the external repository are untouched.
+  Lifecycle and production CLI remain MCP-07/MCP-08; live scientific review is
+  pending. No live inference, real server execution or dependency synchronization
+  is part of this increment.
 - **Suggested commit:** `feat(architecture): generate reports from MCP evidence`
 
 ## MCP-07 - Integrate architecture execution with run lifecycle

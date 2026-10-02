@@ -820,6 +820,9 @@ def test_installed_sdk_closes_scripted_transport(configured_run, monkeypatch, ou
 
 # These tests use the real Runner, Chat Completions conversion, and MCP client.
 def read_agent_trace(run_dir):
+    execution = run_dir / "mcp" / "architecture" / "architecture_execution.json"
+    if execution.exists():
+        return json.loads(execution.read_text(encoding="utf-8"))
     paths = list((run_dir / "mcp").glob("probe_agent_*.json"))
     if len(paths) > 1:
         paths = [
@@ -976,6 +979,7 @@ def agent_script(configured_run, monkeypatch, tmp_path):
                     saved = (
                         read_agent_trace(run_dir)
                         if list((run_dir / "mcp").glob("probe_agent_*.json"))
+                        or (run_dir / "mcp" / "architecture").exists()
                         else read_trace(run_dir)
                     )
                     assert saved["calls"][-1]["state"] == "started"
@@ -1043,7 +1047,7 @@ def agent_script(configured_run, monkeypatch, tmp_path):
                     group.cancel_scope.cancel()
         finally:
             paths = list((run_dir / "mcp").glob("probe_agent_*.json"))
-            if len(paths) == 1:
+            if len(paths) == 1 or (run_dir / "mcp" / "architecture").exists():
                 assert read_agent_trace(run_dir)["state"] == "running"
             state.closed = True
             for stream in (replies, reader, writer, requests):
@@ -1166,8 +1170,9 @@ def test_agent_multiple_rounds_and_sequential_tools(configured_run, agent_script
         "invalid_arguments",
     ],
 )
+@pytest.mark.parametrize("persist_architecture", [False, True])
 def test_agent_failure_records_and_cleanup(
-    configured_run, agent_script, failure, capsys
+    configured_run, agent_script, failure, capsys, persist_architecture
 ):
     first = completion(("sdk-first", "read_section", {"section": "Design"}))
     if failure == "max_turns":
@@ -1192,7 +1197,10 @@ def test_agent_failure_records_and_cleanup(
     else:
         agent_script.responses = [completion(text="", choices=failure != "no_choices")]
         turns = 8
-    assert probe.main(agent_arguments(configured_run, turns)) == 1
+    argv = agent_arguments(configured_run, turns)
+    if persist_architecture:
+        argv += ["--agent-task", "architecture", "--persist-architecture"]
+    assert probe.main(argv) == 1
     saved = read_agent_trace(configured_run[0])
     assert saved["state"] == "failed"
     assert saved["termination_reason"] == (
@@ -1203,6 +1211,11 @@ def test_agent_failure_records_and_cleanup(
         else "model_failure"
     )
     assert saved["final_text"] is None
+    if persist_architecture:
+        assert saved["structural_validation"] is None and saved["report_path"] is None
+        assert not (
+            configured_run[0] / "mcp/architecture/architecture_evidence_report.md"
+        ).exists()
     assert agent_script.closed and agent_script.model_closed
     if failure in ("truncated", "empty", "no_choices", "invalid_arguments"):
         assert len(agent_script.calls) == 1
@@ -1224,7 +1237,10 @@ def test_agent_failure_records_and_cleanup(
 
 
 @pytest.mark.parametrize("phase", ["model", "tool"])
-def test_agent_cancellation_records_and_cleanup(configured_run, agent_script, phase):
+@pytest.mark.parametrize("persist_architecture", [False, True])
+def test_agent_cancellation_records_and_cleanup(
+    configured_run, agent_script, phase, persist_architecture
+):
     async def exercise():
         reached = asyncio.Event()
         if phase == "model":
@@ -1235,7 +1251,12 @@ def test_agent_cancellation_records_and_cleanup(configured_run, agent_script, ph
                 completion(("sdk-cancel", "get_asset", {"asset_id": "page:1"}))
             ]
         task = asyncio.create_task(
-            probe.probe(*configured_run, agent_model="explicit-model")
+            probe.probe(
+                *configured_run,
+                agent_model="explicit-model",
+                agent_task="architecture" if persist_architecture else "geometry",
+                persist_architecture=persist_architecture,
+            )
         )
         await asyncio.wait_for(reached.wait(), 5)
         task.cancel()
@@ -1247,6 +1268,11 @@ def test_agent_cancellation_records_and_cleanup(configured_run, agent_script, ph
     assert saved["state"] == "cancelled"
     assert saved["termination_reason"] == "cancellation"
     assert agent_script.closed and agent_script.model_closed
+    if persist_architecture:
+        assert saved["structural_validation"] is None and saved["report_path"] is None
+        assert not (
+            configured_run[0] / "mcp/architecture/architecture_evidence_report.md"
+        ).exists()
     if phase == "model":
         assert saved["model_requests"][-1]["state"] == "cancelled"
         assert "response" not in saved["model_requests"][-1]
@@ -2067,8 +2093,9 @@ def test_explicit_geometry_connection_is_model_free(configured_run, agent_script
 
 
 @pytest.mark.parametrize("configured_run", [2], indirect=True)
+@pytest.mark.parametrize("persist_architecture", [False, True])
 def test_architecture_iterative_acquisition_and_report(
-    configured_run, agent_script, visual_case
+    configured_run, agent_script, visual_case, persist_architecture
 ):
     run_dir = configured_run[0]
     metadata_before = {
@@ -2235,10 +2262,10 @@ def test_architecture_iterative_acquisition_and_report(
         )
         for i, calls in enumerate(rounds)
     ] + [completion(text=MCP_ASSUMED_REPORT)]
-    assert (
-        probe.main(agent_arguments(configured_run) + ["--agent-task", "architecture"])
-        == 0
-    )
+    argv = agent_arguments(configured_run) + ["--agent-task", "architecture"]
+    if persist_architecture:
+        argv += ["--persist-architecture"]
+    assert probe.main(argv) == 0
     saved = read_agent_trace(run_dir)
     assert [
         (call["name"], call["arguments"]) for call in agent_script.calls[1:]
@@ -2261,6 +2288,7 @@ def test_architecture_iterative_acquisition_and_report(
     assert visual["asset_id"] == catalog["items"][0]["id"]
     assert visual["inspection_id"] == diagnostic["inspection_id"]
     assert visual["diagnostic"]["lookup"] == "available"
+    assert visual["diagnostic"]["reference"].startswith("mcp/inspections/")
     assert visual["visual_coverage"] == "partial" and visual["limitations"]
     assert saved["calls"][-1]["visual"]["status"] == "unavailable"
     assert saved["calls"][-1]["visual"]["successful_observations"] == 0
@@ -2282,8 +2310,19 @@ def test_architecture_iterative_acquisition_and_report(
     assert not (run_dir / "architecture").exists()
     assert {path.name for path in (run_dir / "mcp").iterdir()} == {
         "inspections",
-        next((run_dir / "mcp").glob("probe_agent_*.json")).name,
+        "architecture"
+        if persist_architecture
+        else next((run_dir / "mcp").glob("probe_agent_*.json")).name,
     }
+    if persist_architecture:
+        assert saved["structural_validation"] == {"passed": True, "errors": []}
+        assert (
+            saved["report_path"] == "mcp/architecture/architecture_evidence_report.md"
+        )
+        assert (
+            run_dir / saved["report_path"]
+        ).read_bytes() == MCP_ASSUMED_REPORT.encode("utf-8")
+        assert not list((run_dir / "mcp").glob("probe_agent_*.json"))
 
 
 def test_architecture_unavailable_inspection_preserves_text_report(
@@ -2367,6 +2406,353 @@ def test_architecture_budget_exhaustion_preserves_partial_trace(
     assert len(agent_script.requests) == 1 and len(agent_script.calls) == 2
     assert agent_script.closed and agent_script.model_closed
     assert not (configured_run[0] / "architecture").exists()
+
+
+def architecture_arguments(configured_run):
+    return agent_arguments(configured_run) + [
+        "--agent-task",
+        "architecture",
+        "--persist-architecture",
+    ]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [[], ["--agent-model", "explicit-model"], ["--agent-task", "architecture"]],
+)
+def test_persist_architecture_requires_explicit_task_and_model(
+    configured_run, agent_script, options
+):
+    assert (
+        probe.main(arguments(configured_run) + options + ["--persist-architecture"])
+        == 1
+    )
+    assert not (configured_run[0] / "mcp").exists()
+    assert not agent_script.requests and not agent_script.calls
+
+
+@pytest.mark.parametrize("invalid", ["model", "endpoint", "pdf", "executable"])
+def test_architecture_local_preflight_precedes_reservation(
+    configured_run, agent_script, monkeypatch, invalid
+):
+    argv = architecture_arguments(configured_run)
+    if invalid == "model":
+        argv[argv.index("--agent-model") + 1] = " "
+    elif invalid == "endpoint":
+        monkeypatch.delenv("SKYNET_API_KEY")
+    elif invalid == "pdf":
+        (configured_run[0] / "input/paper with spaces.pdf").write_bytes(b"changed PDF")
+    else:
+        configured_run[1].unlink()
+    if invalid == "model":
+        with pytest.raises(SystemExit) as error:
+            probe.main(argv)
+        assert error.value.code == 2
+    else:
+        assert probe.main(argv) == 1
+    assert not (configured_run[0] / "mcp").exists()
+    assert not agent_script.requests and not agent_script.calls
+
+
+@pytest.mark.parametrize(
+    "report", [MCP_NO_ASSUMPTIONS_REPORT, "Non-empty invalid report."]
+)
+def test_architecture_publication_without_baseline_prerequisites(
+    configured_run, agent_script, monkeypatch, report
+):
+    from antenna_paper_extraction import mcp_architecture
+
+    run_dir = configured_run[0]
+    before = {
+        name: (run_dir / name).read_bytes() for name in ("manifest.json", "status.json")
+    }
+    report += "\nsynthetic-agent-secret\n"
+    agent_script.responses = [completion(text=report)]
+    write_bytes = mcp_architecture.write_bytes
+
+    def publish(path, content):
+        assert agent_script.closed and agent_script.model_closed
+        saved = read_agent_trace(run_dir)
+        assert saved["state"] == "running" and saved["report_path"] is None
+        assert saved["structural_validation"] is not None
+        assert content == saved["final_text"].encode("utf-8")
+        write_bytes(path, content)
+
+    monkeypatch.setattr(mcp_architecture, "write_bytes", publish)
+
+    def check_initial_metadata(saved):
+        assert saved["structural_validation"] is None and saved["report_path"] is None
+
+    agent_script.before_model = check_initial_metadata
+    # Exercise the CLI's unchanged default budget.
+    argv = architecture_arguments(configured_run)
+    del argv[argv.index("--max-turns") : argv.index("--max-turns") + 2]
+    assert probe.main(argv) == 0
+    saved = read_agent_trace(run_dir)
+    errors = validate_architecture_report(saved["final_text"])
+    assert saved["structural_validation"] == {
+        "passed": not errors,
+        "errors": list(errors),
+    }
+    assert (
+        saved["state"] == "succeeded" and saved["termination_reason"] == "final_answer"
+    )
+    assert saved["configuration"]["max_turns"] == 8
+    assert saved["final_text"] == report.replace(
+        "synthetic-agent-secret", "[redacted credential]"
+    )
+    assert (run_dir / saved["report_path"]).read_bytes() == saved["final_text"].encode(
+        "utf-8"
+    )
+    assert saved["counts"] == {
+        "model_requests": 1,
+        "model_responses": 1,
+        "mcp_calls": 1,
+    }
+    assert saved["model_requests"][0]["response"]["provider_extra"] == {
+        "preserved": True
+    }
+    assert saved["usage"]["total_tokens"] == 15
+    assert before == {name: (run_dir / name).read_bytes() for name in before}
+    assert not list((run_dir / "mcp").glob("probe_*.json"))
+    for path in ("pages", "document_conversion", "figures", "architecture"):
+        assert not (run_dir / path).exists()
+
+
+@pytest.mark.parametrize(
+    "entry", ["empty_directory", "directory", "file", "symlink", "broken_symlink"]
+)
+def test_architecture_existing_output_is_preserved(
+    configured_run, agent_script, tmp_path, entry
+):
+    output = configured_run[0] / "mcp/architecture"
+    output.parent.mkdir()
+    if entry in {"directory", "empty_directory"}:
+        output.mkdir()
+        if entry == "directory":
+            (output / "existing.md").write_bytes(b"owner report")
+    elif entry == "file":
+        output.write_bytes(b"owner output")
+    else:
+        target = tmp_path / "target"
+        if entry == "symlink":
+            target.mkdir()
+            (target / "existing.md").write_bytes(b"owner report")
+        try:
+            output.symlink_to(target, target_is_directory=True)
+        except OSError:
+            pytest.skip("This Windows environment does not permit symlink creation.")
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    assert not agent_script.requests and not agent_script.calls
+    assert not list(output.parent.glob("probe_*.json"))
+    if entry == "file":
+        assert output.read_bytes() == b"owner output"
+    elif entry in {"directory", "symlink"}:
+        assert (output / "existing.md").read_bytes() == b"owner report"
+    elif entry == "broken_symlink":
+        assert output.is_symlink() and output.readlink() == target
+    else:
+        assert list(output.iterdir()) == []
+
+
+def test_architecture_exclusive_reservation_rejects_concurrent_output(
+    configured_run, agent_script, monkeypatch
+):
+    output = configured_run[0] / "mcp/architecture"
+    output.parent.mkdir()
+    mkdir = Path.mkdir
+
+    def concurrent_mkdir(self, *args, **kwargs):
+        if self == output:
+            mkdir(self)
+            (self / "owner.md").write_bytes(b"concurrent output")
+        return mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", concurrent_mkdir)
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    assert not agent_script.requests and not agent_script.calls
+    assert (output / "owner.md").read_bytes() == b"concurrent output"
+    assert list(output.iterdir()) == [output / "owner.md"]
+
+
+def test_architecture_existing_mcp_and_baseline_data_are_allowed(
+    configured_run, agent_script
+):
+    run_dir = configured_run[0]
+    existing = {}
+    for name in (
+        "mcp/store/existing/paper.sqlite",
+        "mcp/images/asset.png",
+        "mcp/inspections/existing.json",
+        "mcp/probe_agent_existing.json",
+        "architecture/architecture_evidence_report.md",
+        "architecture/architecture_execution.json",
+    ):
+        path = run_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"existing owner data")
+        existing[path] = path.read_bytes()
+    agent_script.responses = [completion(text=MCP_NO_ASSUMPTIONS_REPORT)]
+    assert probe.main(architecture_arguments(configured_run)) == 0
+    assert existing == {path: path.read_bytes() for path in existing}
+    assert list((run_dir / "mcp").glob("probe_agent_*.json")) == [
+        run_dir / "mcp/probe_agent_existing.json"
+    ]
+
+
+def test_architecture_mcp_path_escape_prevents_execution(
+    configured_run, agent_script, tmp_path
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (configured_run[0] / "mcp").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("This Windows environment does not permit symlink creation.")
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    assert not agent_script.requests and not agent_script.calls
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "phase", ["startup", "discovery", "identity", "server_cleanup", "client_cleanup"]
+)
+def test_architecture_connection_failure_preserves_execution(
+    configured_run, agent_script, monkeypatch, phase, capsys
+):
+    from antenna_paper_extraction.mcp_agent import RecordedOpenAI
+
+    agent_script.responses = [completion(text=MCP_NO_ASSUMPTIONS_REPORT)]
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("private third-party exception")
+
+    if phase == "startup":
+        monkeypatch.setattr(probe.QuietStdioServer, "__aenter__", fail)
+    elif phase == "discovery":
+        monkeypatch.setattr(probe.QuietStdioServer, "list_tools", fail)
+    elif phase == "identity":
+        monkeypatch.setattr(
+            probe, "decode_overview", lambda _: SimpleNamespace(document_id="0" * 64)
+        )
+    else:
+        owner = probe.QuietStdioServer if phase == "server_cleanup" else RecordedOpenAI
+        original = owner.__aexit__
+
+        async def fail_cleanup(self, *args):
+            await original(self, *args)
+            raise RuntimeError("private third-party exception")
+
+        monkeypatch.setattr(owner, "__aexit__", fail_cleanup)
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    saved = read_agent_trace(configured_run[0])
+    assert saved["state"] == "failed" and saved["report_path"] is None
+    assert saved["structural_validation"] is None
+    assert saved["termination_reason"] == (
+        "cleanup_failure" if phase == "server_cleanup" else "tool_failure"
+    )
+    assert not (
+        configured_run[0] / "mcp/architecture/architecture_evidence_report.md"
+    ).exists()
+    output = capsys.readouterr()
+    assert "private" not in output.out + output.err + json.dumps(saved)
+
+
+@pytest.mark.parametrize(
+    "failed_write",
+    [
+        "initial",
+        "raw_model",
+        "validation",
+        "report",
+        "diagnostic",
+        "metadata",
+        "removal",
+    ],
+)
+def test_architecture_required_writes_preserve_last_valid_execution(
+    configured_run, agent_script, monkeypatch, failed_write, capsys
+):
+    run_dir = configured_run[0]
+    metadata_before = {
+        name: (run_dir / name).read_bytes() for name in ("manifest.json", "status.json")
+    }
+    agent_script.responses = [completion(text=MCP_NO_ASSUMPTIONS_REPORT)]
+    replace = persistence.os.replace
+    last_valid = []
+
+    def fail_replace(source, destination):
+        path = Path(destination)
+        data = (
+            json.loads(Path(source).read_text(encoding="utf-8"))
+            if path.suffix == ".json"
+            else None
+        )
+        failure = (
+            failed_write == "initial"
+            and data is not None
+            and not data["calls"]
+            or failed_write == "raw_model"
+            and data is not None
+            and data["model_requests"]
+            and "response" in data["model_requests"][-1]
+            or failed_write == "validation"
+            and data is not None
+            and data["structural_validation"] is not None
+            or failed_write in {"report", "diagnostic"}
+            and path.suffix == ".md"
+            or failed_write == "diagnostic"
+            and data is not None
+            and data["state"] == "failed"
+            or failed_write in {"metadata", "removal"}
+            and data is not None
+            and data["state"] == "succeeded"
+        )
+        if failure:
+            if path.suffix == ".json" and path.exists():
+                last_valid.append(path.read_bytes())
+            raise OSError("private persistence exception")
+        replace(source, destination)
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+    if failed_write == "removal":
+        unlink = Path.unlink
+
+        def fail_unlink(self, *args, **kwargs):
+            if self.name == "architecture_evidence_report.md":
+                raise OSError("private removal exception")
+            return unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    directory = run_dir / "mcp/architecture"
+    assert directory.is_dir()
+    assert metadata_before == {
+        name: (run_dir / name).read_bytes() for name in metadata_before
+    }
+    report = directory / "architecture_evidence_report.md"
+    assert report.exists() == (failed_write == "removal")
+    if failed_write == "initial":
+        assert list(directory.iterdir()) == []
+        assert not agent_script.requests and not agent_script.calls
+    else:
+        saved = read_agent_trace(run_dir)
+        assert saved["state"] == ("failed" if failed_write == "report" else "running")
+        assert saved["report_path"] is None
+        if last_valid:
+            assert (
+                directory / "architecture_execution.json"
+            ).read_bytes() == last_valid[-1]
+        if failed_write == "report":
+            assert saved["termination_reason"] == "persistence_failure"
+        assert agent_script.closed and agent_script.model_closed
+    output = capsys.readouterr()
+    assert "private" not in output.out + output.err
+    assert "Agent completed" not in output.out
+    # Failed executions remain reserved; a later attempt makes no external calls.
+    counts = (len(agent_script.requests), len(agent_script.calls))
+    assert probe.main(architecture_arguments(configured_run)) == 1
+    assert counts == (len(agent_script.requests), len(agent_script.calls))
 
 
 def test_visual_summary_excludes_private_payload_and_keeps_partial_usage(

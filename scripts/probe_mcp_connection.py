@@ -33,6 +33,10 @@ from antenna_paper_extraction.mcp_agent import (
     run_evidence_agent,
     timestamp,
 )
+from antenna_paper_extraction.mcp_architecture import (
+    finalize_architecture_report,
+    reserve_architecture_output,
+)
 from antenna_paper_extraction.runs import (
     RunManifest,
     load_run_status,
@@ -224,11 +228,16 @@ async def probe(
     agent_model: str | None = None,
     agent_task: str = "geometry",
     max_turns: int = 8,
+    persist_architecture: bool = False,
 ) -> None:
     if agent_task not in {"geometry", "architecture"}:
         raise ProbeError("agent_task must be geometry or architecture.")
     if agent_task == "architecture" and agent_model is None:
         raise ProbeError("Architecture selection requires --agent-model.")
+    if persist_architecture and (agent_task != "architecture" or agent_model is None):
+        raise ProbeError(
+            "--persist-architecture requires --agent-task architecture and --agent-model."
+        )
     instructions, task = (
         (MCP_ARCHITECTURE_INSTRUCTIONS, MCP_ARCHITECTURE_TASK)
         if agent_task == "architecture"
@@ -280,6 +289,9 @@ async def probe(
             configuration=configuration,
             instructions=instructions,
             task=task,
+            output_path=(
+                reserve_architecture_output(run_dir) if persist_architecture else None
+            ),
         )
     )
     print(f"Trace: {json.dumps(str(trace.path))}")
@@ -329,6 +341,9 @@ async def probe(
                         max_turns=max_turns,
                     )
                 operation = "cleanup"
+        if persist_architecture:
+            operation = "report publication"
+            finalize_architecture_report(trace)
     except asyncio.CancelledError:
         try:
             trace.finish("cancelled", "Probe cancelled.", reason="cancellation")
@@ -338,7 +353,7 @@ async def probe(
     except Exception as error:  # noqa: BLE001 -- never display external error bodies
         reason = (
             "persistence_failure"
-            if trace.persistence_failed
+            if trace.persistence_failed or isinstance(error, ProbePersistenceError)
             else "max_turns"
             if isinstance(error, MaxTurnsExceeded)
             else "model_failure"
@@ -360,7 +375,11 @@ async def probe(
             if reason == "model_failure"
             else f"MCP {operation} failed; check the executable and server configuration."
         )
-        if trace.persistence_failed and agent_model is not None:
+        if (
+            trace.persistence_failed
+            and agent_model is not None
+            and operation != "report publication"
+        ):
             diagnostic = "MCP trace persistence failed; probe stopped."
         try:
             trace.finish("failed", diagnostic, reason=reason)
@@ -369,7 +388,8 @@ async def probe(
         raise ProbeError(diagnostic) from None
 
     # Report success only after the connection and child process have closed.
-    trace.finish("succeeded", reason="final_answer" if agent_model else None)
+    if not persist_architecture:
+        trace.finish("succeeded", reason="final_answer" if agent_model else None)
     print(f"Run: {json.dumps(manifest.run_id)}")
     print(f"Document: {manifest.document_id}")
     print(f"Tools: {', '.join(sorted(names))}")
@@ -407,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         "--agent-task", choices=("geometry", "architecture"), default="geometry"
     )
     parser.add_argument("--max-turns", type=positive_turns, default=8)
+    parser.add_argument("--persist-architecture", action="store_true")
     args = parser.parse_args(argv)
     # SDK logs can include tool/error bodies. This standalone probe emits only
     # controlled diagnostics and restores logging for callers of main().
@@ -421,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent_model=args.agent_model,
                 agent_task=args.agent_task,
                 max_turns=args.max_turns,
+                persist_architecture=args.persist_architecture,
             )
         )
     except ProbeError as error:

@@ -144,10 +144,11 @@ class ProbeTrace:
         configuration: dict | None = None,
         instructions: str = EVIDENCE_INSTRUCTIONS,
         task: str = EVIDENCE_TASK,
+        output_path: Path | None = None,
     ):
         trace_id = uuid4().hex
         mode = "agent" if configuration is not None else "connection"
-        self.path = run_dir / "mcp" / f"probe_{mode}_{trace_id}.json"
+        self.path = output_path or run_dir / "mcp" / f"probe_{mode}_{trace_id}.json"
         self.run_dir = run_dir.resolve()
         self.data: dict[str, Any] = {
             "trace_id": trace_id,
@@ -170,6 +171,8 @@ class ProbeTrace:
                 final_text=None,
                 termination_reason=None,
             )
+        if output_path is not None:
+            self.data.update(structural_validation=None, report_path=None)
         self.persistence_failed = False
         credential_name = re.compile(
             r"(?:^|_)(?:API_KEY|KEY|TOKEN|PASSWORD|SECRET|CREDENTIALS?|AUTH)(?:_|$)",

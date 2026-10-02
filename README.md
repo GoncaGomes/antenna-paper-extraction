@@ -53,9 +53,10 @@ pipeline orchestration remain unimplemented and outside this branch's scope.
 The `exp/architecture-mcp` branch will compare iterative MCP evidence acquisition
 with the existing extraction path. Its implementation tasks are in
 [PLAN.md](PLAN.md). The deterministic connection probe, narrow geometry evidence
-task and MCP architecture instruction set are implemented. The probe can generate
-architecture report text; separate report/execution artefacts remain deferred
-to MCP-06, and live scientific evaluation is pending.
+task and MCP architecture report persistence are implemented. The explicit
+development probe can publish the report and incremental execution trace;
+lifecycle integration, a production MCP CLI and live scientific evaluation
+remain pending.
 
 - Reuse `init-run` to preserve one PDF and establish run identity, then launch
   an external MCP server through stdio, bound to that preserved PDF.
@@ -78,8 +79,8 @@ observations must remain distinguishable through source and diagnostic reference
 Binding configures and validates the document. Store creation or reuse occurs
 when a tool opens the store; binding itself does not create SQLite. The probe's
 overview call can create or reuse the store below, and the probe writes a local
-trace. Agent tool requests may also produce server image/inspection artefacts;
-MCP architecture artefacts remain planned:
+trace. Agent tool requests may also produce server image/inspection artefacts.
+The implemented MCP paths are:
 
 | MCP artefact | Purpose |
 | --- | --- |
@@ -88,12 +89,12 @@ MCP architecture artefacts remain planned:
 | `mcp/inspections/...` | Visual inspection diagnostics |
 | `mcp/probe_connection_<unique-id>.json` | Incremental deterministic connection-probe trace |
 | `mcp/probe_agent_<unique-id>.json` | Geometry or architecture probe: ordered model/MCP trace and `final_text` |
-| `architecture/architecture_evidence_report.md` | MCP-derived evidence report |
-| `architecture/architecture_execution.json` | MCP execution and incremental trace |
+| `mcp/architecture/architecture_evidence_report.md` | MCP-derived evidence report, explicitly published with `--persist-architecture` |
+| `mcp/architecture/architecture_execution.json` | Same incremental agent trace, with structural diagnostics and publication metadata |
 
-The architecture filenames already exist in the baseline; producing them through
-MCP is deferred to MCP-06. The probe accepts explicit server executable and
-working-directory paths and optional geometry or architecture agent tasks;
+Baseline architecture artefacts remain under `architecture/`. The probe accepts
+explicit server executable and working-directory paths and optional geometry or
+architecture agent tasks;
 there is no production MCP architecture CLI command yet. Tool calls,
 principal-model requests and confirmed visual-model calls are counted separately;
 a `get_asset` call or supplied question does not prove a visual-model request
@@ -212,14 +213,16 @@ are explicitly marked as assumed wherever used in the working reconstruction.
 They are ordinary report content, distinct from extracted evidence claims.
 The baseline architecture instructions and extraction behaviour are unchanged.
 
-To opt into architecture investigation with a larger finite budget, use an
-existing initialized run and an explicit deployed principal model identifier:
+To opt into architecture investigation and report publication with a larger finite
+budget, use an existing initialized run and an explicit deployed principal model
+identifier:
 
 ```powershell
 uv run --no-sync python scripts/probe_mcp_connection.py `
   --run-dir "C:\dev\antenna-paper-extraction\runs\<existing-initialized-run>" `
   --agent-model "<deployed-principal-model-id>" `
   --agent-task architecture `
+  --persist-architecture `
   --max-turns 80 `
   --mcp-executable "C:\dev\reviewer-mcp\.venv\Scripts\mcp-pdf-ingestion.exe" `
   --mcp-cwd "C:\dev\reviewer-mcp"
@@ -229,7 +232,36 @@ Architecture selection does not increase the default budget of 8. Both tasks
 persist their exact selected instructions, Runner input and task identity in the
 probe trace. The returned report is stored unchanged in its existing `final_text`
 field, without runtime structural rejection, semantic validation or automatic
-correction. Separate architecture report/execution files remain MCP-06 work.
+correction. Without `--persist-architecture`, the existing connection, geometry
+and architecture-text probes retain their paths and behaviour.
+
+`--persist-architecture` requires `--agent-task architecture` and a nonblank
+explicit `--agent-model`. Local configuration and preserved-PDF/identity preflight
+complete before exclusively reserving `mcp/architecture/`. No rendered pages,
+NuExtract3 conversion, `document.md`, Docling figures or successful baseline
+preprocessing phases are required. Existing server stores, images, inspections,
+probe traces and baseline architecture outputs are allowed. Any existing
+`mcp/architecture` entry is rejected, including an empty directory, file or broken
+symlink; outputs must remain contained in the run's MCP directory. Failed
+executions retain their reservation and reject a later invocation.
+
+The same recorder starts directly in `mcp/architecture/architecture_execution.json`
+before external calls; it creates no duplicate `probe_agent` trace. Its
+`structural_validation` and `report_path` initially contain null. After usable
+final text and successful model/server cleanup, the existing structural validator
+records `passed` and `errors` before atomic UTF-8 Markdown publication. Non-empty
+structurally invalid reports are still published, with `passed=false`; operational
+success does not imply scientific acceptance. The Markdown preserves the saved,
+redacted `final_text`, including A-series claims and H-series assumptions, without
+rewriting or repair. Success is persisted only after publication, with
+`report_path=mcp/architecture/architecture_evidence_report.md`. Report-write
+failures return failure with `termination_reason=persistence_failure` when
+diagnostics can be saved. If final execution persistence fails, removal of only
+the just-published report is attempted; the last valid JSON and other evidence
+are preserved. An unavailable writer can leave a running trace, and failed report
+removal can leave Markdown without durable success metadata. Lifecycle integration
+and the production CLI remain MCP-07/MCP-08 work.
+
 Scripted local tests establish integration and structural compatibility, including
 H-series tables; live model policy compliance and scientific accuracy remain
 pending explicit evaluation.
@@ -249,8 +281,10 @@ timeout. Model/client and MCP retries are disabled. SDK tool concurrency is one,
 including when a model returns multiple tool calls, and `parallel_tool_calls` is
 false. SDK tracing is disabled. No live inference is part of local tests.
 
-Each invocation prints a fresh `mcp/probe_agent_<unique-id>.json` path and preserves
-earlier traces. The shared atomic writer persists effective messages/instructions,
+Each ordinary agent probe prints a fresh `mcp/probe_agent_<unique-id>.json` path and
+preserves earlier traces. Publication mode prints its reserved
+`mcp/architecture/architecture_execution.json` path. The shared atomic writer
+persists effective messages/instructions,
 advertised tool schemas and request settings before dispatch, and complete raw
 Chat Completions responses before SDK normalization or tool execution. Records
 include local model request IDs, ordered events, raw tool-call IDs/arguments,
@@ -260,7 +294,8 @@ the preliminary identity-check overview has no model/tool-call ID. Credentials,
 headers and image payloads are omitted from both model and tool records.
 
 `state=succeeded` with `termination_reason=final_answer` means final text was saved
-and client/session cleanup completed. `state=failed` with `max_turns` means the
+and client/session cleanup completed; publication mode additionally requires
+durable report publication metadata. `state=failed` with `max_turns` means the
 budget was exhausted; `model_failure`, `tool_failure` or `cleanup_failure` identify
 other execution failures. Cancellation records `state=cancelled` and
 `termination_reason=cancellation`. Counts distinguish principal model requests,
@@ -271,9 +306,9 @@ persistence failure stops continuation and returns nonzero; because the writer i
 the last valid trace can retain `state=running`, a `started` record or final text
 without a terminal state. The controlled CLI diagnostic identifies persistence
 failure. Truncated/unusable responses are preserved and fail explicitly. Exit
-codes are 0 for normal completion, 1 for failure and 130 for cancellation. Neither
-probe mode changes manifest/status files or creates separate architecture
-report/execution files; architecture report text stays in `final_text`.
+codes are 0 for normal completion, 1 for failure and 130 for cancellation. No
+probe mode changes manifest/status files or marks baseline phases as succeeded.
+Separate MCP architecture report/execution files require `--persist-architecture`.
 
 After the complete `get_asset` response is durable, its call record gains a
 `visual` summary, saved before SDK continuation. It retains returned asset ID,
