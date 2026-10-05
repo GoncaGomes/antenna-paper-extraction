@@ -90,7 +90,10 @@ class QuietStdioServer(MCPServerStdio):
             "trace_id": data["trace_id"],
             "tool_name": self.trace.sanitize(tool_name),
             "arguments": self.trace.sanitize(arguments),
+            "origin": "agent" if self.trace.active_tool_call_id else "runtime",
             "started_at": timestamp(),
+            "finished_at": None,
+            "elapsed_seconds": None,
             "state": "started",
         }
         if "model_requests" in data:
@@ -353,9 +356,8 @@ async def probe(
                         "MCP tool discovery must match exactly the six tools."
                     )
                 operation = "get_paper_overview"
-                overview = decode_overview(
-                    await server.call_tool("get_paper_overview", {})
-                )
+                overview_result = await server.call_tool("get_paper_overview", {})
+                overview = decode_overview(overview_result)
                 if overview.document_id.removeprefix("sha256:") != digest:
                     raise ProbeError(
                         "Server document identity does not match the verified PDF."
@@ -370,6 +372,9 @@ async def probe(
                         api_key=api_key,
                         principal_timeout_seconds=principal_timeout_seconds,
                         max_turns=max_turns,
+                        initial_overview=overview_result.model_dump(
+                            mode="json", by_alias=True
+                        ),
                     )
                 operation = "cleanup"
         if persist_architecture:

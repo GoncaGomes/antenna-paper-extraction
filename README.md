@@ -91,7 +91,7 @@ The implemented MCP paths are:
 | `mcp/probe_connection_<unique-id>.json` | Incremental deterministic connection-probe trace |
 | `mcp/probe_agent_<unique-id>.json` | Geometry or architecture probe: ordered model/MCP trace and `final_text` |
 | `mcp/architecture/architecture_evidence_report.md` | MCP-derived evidence report, published by the MCP CLI or probe `--persist-architecture` |
-| `mcp/architecture/architecture_execution.json` | Same incremental agent trace, with structural diagnostics and publication metadata |
+| `mcp/architecture/architecture_execution.json` | Versioned chronological execution trace, with structural diagnostics and publication metadata |
 
 Baseline architecture artefacts remain under `architecture/`, tracked by
 `architecture_extraction`. MCP publication uses `architecture_mcp_extraction`
@@ -298,8 +298,14 @@ uv run --no-sync python scripts/probe_mcp_connection.py `
 ```
 
 Architecture selection does not increase the default budget of 8. Both tasks
-persist their exact selected instructions, Runner input and task identity in the
-probe trace. The returned report is stored unchanged in its existing `final_text`
+persist their exact selected instructions, task and effective model inputs in the
+probe trace. The runtime's complete startup overview response, including its
+outline and available metadata, is supplied as initial evidence only after its
+document identity matches the verified preserved PDF. It appears in the first
+recorded model request as evidence, not instructions; no second initialization
+call is made. The agent can still explicitly call `get_paper_overview`. When no
+initial overview is supplied, the architecture instructions request it once.
+The returned report is stored unchanged in its existing `final_text`
 field, without runtime structural rejection, semantic validation or automatic
 correction. Without `--persist-architecture`, the existing connection, geometry
 and architecture-text probes retain their paths and behaviour.
@@ -400,6 +406,31 @@ Publication mode changes only the MCP phase in `status.json`; `manifest.json` an
 baseline phases remain unchanged.
 Separate MCP architecture report/execution files are always published by the MCP
 CLI; development probes require `--persist-architecture`.
+
+New persisted MCP architecture executions use `format_version=2`. Compact
+identity, state, termination reason and configuration precede `operation_summary`
+and one detailed `operations` list. Each summary references its detailed record
+by stable `id` and includes `type` (`model` or `mcp`), name, origin, start/finish
+times, duration and state. Both lists follow recorded start-event order through
+`event_order`, even when timestamps tie or move backwards. The compact `events`
+ledger remains available for response chronology. Detailed payloads occur once,
+retaining original arguments, effective requests, raw responses, errors, local
+and SDK correlation IDs, parent model references and visual inspection references.
+Startup MCP calls have `origin=runtime`; agent-requested calls have `origin=agent`.
+Unfinished operations retain null finish time and duration in running or partial
+traces. Recording still precedes execution, and raw responses still precede
+validation, with sequential execution, zero retries and atomic writes.
+
+Final text, publication metadata and diagnostics follow the operations.
+`accounting.principal_model` holds request/response counts and usage;
+`accounting.mcp_calls` counts all MCP calls, including startup;
+`accounting.visual_model` preserves the separate visual counts, uncertainty and
+usage coverage described below. Instructions, task and provenance remain saved.
+Version 2 replaces the persisted `calls`/`model_requests` arrays with `operations`
+and moves `counts`, `usage` and `visual_accounting` into explicit accounting.
+Consumers of architecture execution JSON must select the layout by version.
+Historical executions are not migrated; ordinary connection/agent probe JSON
+and the baseline architecture execution format retain their existing layout.
 
 After the complete `get_asset` response is durable, its call record gains a
 `visual` summary, saved before SDK continuation. It retains returned asset ID,
