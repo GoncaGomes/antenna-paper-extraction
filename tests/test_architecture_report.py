@@ -29,7 +29,7 @@ The substrate material and conductor thickness are not reported.
 
 The feeding arrangement is not specified.
 
-## 4. Derivations and conflicts
+## 4. Semantic interpretations and conflicts
 
 No reconstruction-related derivation or source conflict was identified.
 
@@ -51,7 +51,7 @@ No supported component or material description could be extracted.
 
 Dimensions and feeding details are unavailable.
 
-## 4. Derivations and conflicts
+## 4. Semantic interpretations and conflicts
 
 No supported derivation is possible from the available information.
 

@@ -2037,7 +2037,7 @@ Conductor thickness is assumed to be 0.035 mm for both conductors (H001).
 
 The conductor solids use the assumed 0.035 mm thickness (H001).
 
-## 4. Derivations and conflicts
+## 4. Semantic interpretations and conflicts
 
 - A005 [Derived] The rectangular patch footprint is 96 mm²: L × W = 12 × 8,
   using A003. This does not establish feed-hole or connector dimensions.
@@ -2078,7 +2078,7 @@ Fabrication and measurement are not established.
   have a 1 mm gap, with an ideal simulation port across the gap.
   Evidence: Physical PDF page 1, section 2 (Design).
 
-## 4. Derivations and conflicts
+## 4. Semantic interpretations and conflicts
 
 - A004 [Derived] The end-to-end span is 31 mm, from 15 + 1 + 15 using A003.
   Evidence: A003; sum of the two arm lengths and intervening gap.

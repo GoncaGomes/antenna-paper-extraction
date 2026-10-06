@@ -24,7 +24,7 @@ Material properties and layer details are unavailable.
 
 Dimensions and feeding details are unavailable.
 
-## 4. Derivations and conflicts
+## 4. Semantic interpretations and conflicts
 
 No supported derivation can be established.
 
