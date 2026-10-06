@@ -111,8 +111,7 @@ Report format:
 Required sections:
 """ + "\n".join(REPORT_SECTIONS)
 
-MCP_ARCHITECTURE_INSTRUCTIONS = (
-    """\
+MCP_ARCHITECTURE_INSTRUCTIONS = """\
 You extract the final antenna architecture from the scientific paper bound
 to the available MCP server.
 
@@ -254,7 +253,6 @@ Distinguish information not found, incomplete acquisition, unavailable images, u
 
 Before returning, check that the report describes a consistent working configuration, preserves reported values, and identifies assumptions where they affect the architecture. Do not perform a scientific audit.
 """
-)
 
 MCP_ARCHITECTURE_TASK = """\
 Extract and describe the final antenna architecture from the bound paper. Use MCP evidence to identify its components, materials, geometry, dimensions and connections. Include only necessary, explicitly marked completion assumptions. Return the architecture report defined by the instructions.
