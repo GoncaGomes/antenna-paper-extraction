@@ -355,6 +355,46 @@ generation and general pipeline orchestration are outside this branch's scope.
   limitations and record configuration and metrics.
 - **Suggested commit:** `docs(architecture): record MCP pilot findings`
 
+### Task 2 - Bounded prompt evaluation (2026-10-07)
+
+- Original baseline: `C:/dev/antenna-paper-extraction/runs/run_20261006T172546+0100_22d2746c`.
+  Manifest/run ID and preserved PDF match the supplied input; all nine file hashes
+  unchanged, review copy unused. Assess its five sections for architecture.
+- Both models `qwen3.8-27b`; existing principal/visual/MCP timeouts 900/600/660 s,
+  80 turns, sequential calls and no retries. Owner clarified maximum five; four used.
+
+| Run under `runs/` | Change | Architectural outcome | Seconds | Principal / visual / MCP calls |
+| --- | --- | --- | ---: | --- |
+| `run_20261007T104357+0100_4b7e6c98` | Post-Task-1 prompts unchanged | Lateral assembly placement unselected; A references undefined | 351.4 | 7 / 2 / 7 |
+| `run_20261007T105228+0100_ace5cfc6` | Require free placement choices and sourced A definitions | Invented coordinates substitute 40 mm for reported hg = 50 mm | 341.4 | 4 / 1 / 4 |
+| `run_20261007T110108+0100_6b3224c2` | Source dimensions and relative geometry only | Geometry/connectivity coherent; metallization material unselected | 358.6 | 7 / 2 / 7 |
+| `run_20261007T111320+0100_e4875a37` | Require a material for each needed material layer/region | Constructible working architecture with explicit copper choice | 413.8 | 6 / 2 / 6 |
+
+- Select [fourth report](runs/run_20261007T111320+0100_e4875a37/mcp/architecture/architecture_evidence_report.md).
+  H001: copper; H002: edge SMA, center-to-feedline/shield-to-ground; H003: feedline
+  on plate face. Centering explicitly adopted in interpretation prose. Source
+  dimensions, opposite faces and relative placement retained; no construction
+  blockers. FR4 numerical properties and incidental connector/CAD choices remain.
+- Only `MCP_ARCHITECTURE_INSTRUCTIONS` changed: close free placement, define cited
+  claims, retain relative geometry and adopt material identities. Rules do not fix
+  component types, materials, feeds or drawings. Task, six-section contract, A/H
+  conventions and Task 1 work preserved; server `SYSTEM_PROMPT`/repository unchanged.
+- All executed instructions/tasks and visual prompts match their candidates;
+  reports equal raw final responses. Traces/coverage retained. Total new calls:
+  24 principal, seven confirmed visual, 24 MCP; zero unknown visual calls.
+- Secondary: centering's Visual claim is stronger than its inspection, and claims
+  follow section 6's blocker paragraph. Compatible working centering remains
+  explicit; these presentation/provenance issues do not prevent construction.
+- Focused fake-client checks: 38 passed after each change. Final consumer checks:
+  `uv run --no-sync pytest` 509 passed/11 Windows symlink skips; Ruff lint/format pass.
+  Server existing environment: unittest 156 run/5 corpus skips, Ruff, Basedpyright,
+  Vulture pass; both diff checks pass. Consumer Python 3.12.13; server 3.14.3 retained.
+- Check failures: pre-existing trailing space removed with the geometry paragraph;
+  own temporary `.py` audit copies triggered consumer Ruff rules, renamed to
+  `.snapshot`; only the failed lint/format checks repeated, passed without rule changes.
+- Stop after constructible candidate; no fifth run for prose. One-paper findings
+  only, no generalization/scientific-value validation/CST implementation. Owner review pending.
+
 ## MCP-10 - Compare the six existing cases
 
 - **Status:** pending

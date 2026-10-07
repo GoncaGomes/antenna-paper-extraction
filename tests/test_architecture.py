@@ -31,6 +31,12 @@ No supported derivation can be established.
 ## 5. Reconstruction gaps
 
 The available information is insufficient for reconstruction.
+
+## 6. Final architecture
+
+No final antenna configuration is established by the supplied material.
+Blocking reconstruction gaps: the design, materials, layers, dimensions, placement
+and feeding connections are unavailable.
 """
 
 
@@ -251,7 +257,7 @@ def test_persists_events_and_publishes_valid_report(
     [
         pytest.param(
             "A report without the required sections.",
-            "The report must contain the five required sections in order.",
+            "The report must contain the six required sections in order.",
             id="missing-sections",
         ),
         pytest.param(

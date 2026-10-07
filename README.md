@@ -273,14 +273,17 @@ uv run --no-sync python scripts/probe_mcp_connection.py `
 The probe-only selector `--agent-task {geometry,architecture}` defaults to
 `geometry`, preserving the existing instructions and task. Architecture requires
 `--agent-model`; selecting it without a model fails before server startup or trace
-creation. It uses a separate complete MCP instruction set, with the same five
+creation. It uses a separate complete MCP instruction set, with the same six
 report headings and A-series `Reported`, `Visual` and `Derived` claims. Visual
 claims cite the exact asset ID, returned inspection ID and available page
 provenance, retaining inspection limitations. Proposed completion assumptions
 use H-series IDs in a section 5 table, with justification and uncertainty, and
 are explicitly marked as assumed wherever used in the working reconstruction.
 They are ordinary report content, distinct from extracted evidence claims.
-The baseline architecture instructions and extraction behaviour are unchanged.
+Both architecture paths use the six-heading format. Section 6, `Final architecture`,
+consolidates the adopted configuration into a self-contained description for later
+construction and ends with any remaining blocking reconstruction gaps. The format
+extension leaves each path's extraction and assumption policies unchanged.
 
 To opt into architecture investigation and report publication with a larger finite
 budget, use an existing initialized run and an explicit deployed principal model

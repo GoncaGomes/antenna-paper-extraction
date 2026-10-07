@@ -1,6 +1,7 @@
 import pytest
 
 from antenna_paper_extraction.architecture_report import (
+    REPORT_SECTIONS,
     validate_architecture_report,
 )
 
@@ -36,6 +37,14 @@ No reconstruction-related derivation or source conflict was identified.
 ## 5. Reconstruction gaps
 
 The substrate properties, conductor thickness and feeding details are missing.
+
+## 6. Final architecture
+
+Design B is the final simulated design; fabrication and measurement are not
+established. Its patch is 12 mm long and 8 mm wide (A001, A002).
+
+Blocking reconstruction gaps: substrate material and properties, conductor
+thickness and feeding details are unavailable, preventing a complete construction.
 """
 
 INCOMPLETE_REPORT = """\
@@ -58,6 +67,12 @@ No supported derivation is possible from the available information.
 ## 5. Reconstruction gaps
 
 The available information is insufficient to reconstruct an antenna.
+
+## 6. Final architecture
+
+No supported antenna configuration can be described from the supplied material.
+Blocking reconstruction gaps: the final design, components, materials, dimensions,
+placement and electrical connections are unavailable.
 """
 
 
@@ -73,15 +88,16 @@ def test_rejects_empty_report() -> None:
     assert validate_architecture_report(" \n") == ("The architecture report is empty.",)
 
 
-def test_rejects_missing_section() -> None:
+@pytest.mark.parametrize("heading", REPORT_SECTIONS)
+def test_rejects_missing_section(heading: str) -> None:
     report = VALID_REPORT.replace(
-        "## 5. Reconstruction gaps",
-        "### Reconstruction gaps",
+        heading,
+        heading.replace("## ", "### ", 1),
     )
 
     errors = validate_architecture_report(report)
 
-    assert any("five required sections" in error for error in errors)
+    assert any("six required sections" in error for error in errors)
 
 
 def test_rejects_wrong_section_order() -> None:
@@ -95,18 +111,23 @@ def test_rejects_wrong_section_order() -> None:
 
     errors = validate_architecture_report(report)
 
-    assert any("five required sections" in error for error in errors)
+    assert any("six required sections" in error for error in errors)
 
 
-def test_rejects_empty_section() -> None:
-    report = VALID_REPORT.replace(
-        "The substrate material and conductor thickness are not reported.",
-        "",
+@pytest.mark.parametrize("heading", REPORT_SECTIONS)
+def test_rejects_empty_section(heading: str) -> None:
+    index = REPORT_SECTIONS.index(heading)
+    start = VALID_REPORT.index(heading) + len(heading)
+    end = (
+        VALID_REPORT.index(REPORT_SECTIONS[index + 1])
+        if index + 1 < len(REPORT_SECTIONS)
+        else len(VALID_REPORT)
     )
+    report = VALID_REPORT[:start] + "\n\n" + VALID_REPORT[end:]
 
     errors = validate_architecture_report(report)
 
-    assert "Section is empty: ## 2. Components, materials and layers" in errors
+    assert f"Section is empty: {heading}" in errors
 
 
 def test_rejects_duplicate_claim_definitions() -> None:

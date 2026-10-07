@@ -2056,6 +2056,21 @@ supports no additional positive observation. Unacquired pages remain a limitatio
 | ID | Missing detail | Proposed choice | Basis and uncertainty | Affected geometry |
 | --- | --- | --- | --- | --- |
 | H001 | Copper thickness | 0.035 mm | Practical modelling choice consistent with A002; no direct paper support. The paper does not establish this value. Alternatives change conductor loss and solid thickness. | Patch and ground of Design B |
+
+## 6. Final architecture
+
+Design B is a final simulated rectangular patch with a central coaxial feed;
+fabrication is not established (A001, A003). The copper patch is 12 mm long and
+8 mm wide on a 1.6 mm dielectric layer with relative permittivity 4.4. The
+substrate and copper ground are 20 mm square (A002, A003). Both conductors use
+the adopted 0.035 mm thickness (H001). The L arrows reach the patch edges in
+panel (a); the W endpoints remain unreadable in the partial visual observation
+(A004). The conductor thickness is a working choice whose exact correspondence
+with the authors' implementation is not established.
+
+Blocking reconstruction gaps: feed-hole and connector dimensions are unavailable,
+preventing complete sizing and connection of the feed. Partial and unavailable
+visual inspection leaves the W endpoints unresolved.
 """
 
 MCP_NO_ASSUMPTIONS_REPORT = """\
@@ -2091,15 +2106,27 @@ No reconstruction-relevant conflict was identified.
 
 No completion assumptions are needed for the described simulation geometry.
 The acquired text does not establish a physical connector or fabricated version.
+
+## 6. Final architecture
+
+The final simulated design is a straight centre-fed dipole in free space, formed
+by two collinear cylindrical copper arms, each 15 mm long with radius 0.5 mm,
+separated by a 1 mm gap. An ideal simulation port connects across the gap
+(A001–A003). There are no layers or completion assumptions. This configuration
+describes simulation geometry; a physical connector, fabrication and measurement
+are not established.
+
+No blocking reconstruction gaps identified for this working configuration.
 """
 
-MCP_UNAVAILABLE_REPORT = (
-    MCP_NO_ASSUMPTIONS_REPORT
-    + """
+MCP_UNAVAILABLE_REPORT = MCP_NO_ASSUMPTIONS_REPORT.replace(
+    "## 6. Final architecture",
+    """\
 An inspection of page:1 was unavailable: no stored region was available.
 No positive visual observation is supported by this failure; the geometry above
 is grounded in the acquired paper text.
-"""
+
+## 6. Final architecture""",
 )
 
 
