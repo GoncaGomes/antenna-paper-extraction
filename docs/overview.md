@@ -6,6 +6,55 @@ retains the baseline workflow and adds progressive evidence acquisition through
 the external `mcp-pdf-ingestion` server. Neither path generates the planned final
 architecture or results JSON, and no complete pipeline command is implemented.
 
+## Execution prerequisites
+
+Use the [README quick start](../README.md#setup-and-usage) to select
+`exp/architecture-mcp` and install the client with `uv sync`. Python 3.12 is the
+client target in `.python-version`; `pyproject.toml` declares a minimum of 3.12.
+Git and `uv` are required, along with access to dependency downloads.
+
+Install the external [mcp-pdf-ingestion repository](https://github.com/GoncaGomes/mcp-pdf-ingestion)
+in a separate checkout and virtual environment. The inspected server reference
+is `145808d6cf3f308c5b3b46d767d036a253df9a4e`:
+
+```bash
+git clone https://github.com/GoncaGomes/mcp-pdf-ingestion.git
+cd mcp-pdf-ingestion
+git switch --detach 145808d6cf3f308c5b3b46d767d036a253df9a4e
+```
+
+Follow that revision's [installation instructions](https://github.com/GoncaGomes/mcp-pdf-ingestion/blob/145808d6cf3f308c5b3b46d767d036a253df9a4e/README.md#installation-and-launch)
+to create its environment and install the package, which requires Python 3.12
+or later. This reference exposes the six tools expected by the client and its
+visual system prompt matches both saved inspections in the
+[published example](examples/trace-summary.md#provenance). These checks establish
+interface and prompt correspondence; the run does not confirm the exact server
+revision, and live compatibility has not been retested for this documentation.
+
+Return to the client repository before configuring [.env.example](../.env.example)
+and running the quick start. Set `MCP_PDF_SERVER_CWD` to the absolute server
+checkout directory and `MCP_PDF_SERVER_EXECUTABLE` to its installed console
+executable: `.venv/bin/mcp-pdf-ingestion` on POSIX or
+`.venv/Scripts/mcp-pdf-ingestion.exe` on Windows. Quote paths containing spaces.
+Use the executable file itself, not `uv run`, a shell command or the server's
+Python interpreter. There is no separate manual server-start step: the client
+launches and cleans up a stdio process bound to the run's preserved PDF.
+
+Supply your provider's `SKYNET_BASE_URL`, `SKYNET_API_KEY` and deployed principal
+and visual model identifiers in the client's `.env`. Both models use the same
+service URL and credential. Satisfy the provider's network and authentication
+requirements; this project does not provision model access. The server does
+not load a `.env` of its own during this launch. The sample file's two
+`DOCUMENT_EXTRACTOR_*` settings are optional and only used by baseline conversion.
+
+The example file sets both model timeouts to 600 seconds as sample configuration,
+giving a 660-second MCP session timeout. They are not application defaults.
+The historical run used a 900-second principal timeout and a 600-second visual
+timeout; see its [trace](examples/trace-summary.md#recorded-execution). Recorded
+model identifiers are not a promise of current service availability. Installation,
+server startup and model execution were not repeated for these docs; the quick
+start describes a fresh execution path, not verified byte-for-byte replay.
+
 ## Connection and runtime configuration
 
 Both workflows start with `init-run`, which preserves one PDF under `input/`,
@@ -271,6 +320,8 @@ plus `DOCUMENT_EXTRACTOR_MODEL` and positive
 `DOCUMENT_EXTRACTOR_TIMEOUT_SECONDS`. Baseline architecture uses those endpoint
 settings and the README's principal architecture model/timeout. Both commands
 load the current directory's `.env`, preserving process precedence.
+For baseline architecture, that model must also accept images in the tool
+continuation; MCP principal text/tool support alone is insufficient.
 
 The baseline agent requires successful figures and a pending architecture phase.
 It receives complete Markdown and a catalog from figure/page manifests, then
