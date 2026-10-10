@@ -5,6 +5,42 @@ configuration and commands, see the [README](../README.md). The baseline stops
 at an architecture evidence report; results extraction, canonicalization, final
 consumer JSON generation and complete orchestration remain planned.
 
+## Execution prerequisites
+
+The [README quick start](../README.md#setup-and-usage) runs the baseline from
+the repository root. Python 3.12 is the project target in `.python-version`;
+`pyproject.toml` declares a minimum of 3.12. Git selects the branch, and `uv sync`
+installs the dependencies in `uv.lock`. Internet access is needed for dependency
+installation and may be needed for Docling's first model-weight download.
+
+Copy [`.env.example`](../.env.example) to a local `.env` and supply the deployed
+model identifiers, endpoint URL and credential issued by your service provider.
+Both model stages share `SKYNET_BASE_URL` and `SKYNET_API_KEY`. The repository
+does not host a model service or provision access; satisfy your provider's
+network and authentication requirements before running conversion or extraction.
+
+NuExtract3 conversion uses the OpenAI-compatible Chat Completions interface
+with image inputs and the extra request fields `mode="markdown"` and
+`enable_thinking=false`. Architecture extraction needs a model and endpoint
+supporting function tools followed by image input in a continuation. A generic
+text-only endpoint is insufficient. Figure preparation runs Docling locally;
+it does not use those endpoint credentials.
+
+All six settings in the example file are required by the two model commands.
+The timeout values of 600 seconds are sample configuration, not application
+defaults or measured service guarantees. Adjust them to your service. The
+document timeout must be positive; the architecture timeout must also be
+finite. Existing process values take precedence over `.env`, and the file is
+read from the current working directory. Do not add credentials to published
+reports or execution summaries.
+
+The quick start supplies explicit rendering and asset limits equal to the
+current CLI defaults. It creates a new run and runs each stage in order, rather
+than replaying the [historical example](examples/trace-summary.md). The original
+command line, full environment and producing checkout were not recorded for
+that example. Model availability and repeatability require a separate live
+check; no installation, model call or extraction was run for these docs.
+
 ## Processing stages
 
 ### Source preservation and page rendering

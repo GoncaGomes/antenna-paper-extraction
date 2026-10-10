@@ -49,17 +49,24 @@ fail even when an architecture execution is marked `succeeded`.
 
 ## Setup and usage
 
-Use Python 3.12 and [`uv`](https://docs.astral.sh/uv/):
+Use Git, Python 3.12 and [`uv`](https://docs.astral.sh/uv/). Select the baseline
+branch and install its locked dependencies:
 
 ```bash
+git clone https://github.com/GoncaGomes/antenna-paper-extraction.git
+cd antenna-paper-extraction
+git switch main
 uv sync
 uv run antenna-extract --help
 ```
 
-Conversion requires access to an OpenAI-compatible endpoint with a deployed
-NuExtract3 model. Architecture extraction requires a deployed model that
-supports the baseline tool and multimodal interaction. Configure these settings
-in the process environment or a local `.env` in the current working directory:
+Copy [`.env.example`](.env.example) to `.env` using `cp .env.example .env`
+(PowerShell: `Copy-Item .env.example .env`), then replace the placeholders.
+Run the commands from the repository root so they load that file.
+You need credentials and network access to an OpenAI-compatible service with
+deployed NuExtract3 and architecture models. The architecture model must support
+Chat Completions, tool calls and image input. The service must accept the
+conversion request's `mode` and `enable_thinking` options.
 
 | Variable | Required by | Purpose |
 | --- | --- | --- |
@@ -80,17 +87,22 @@ containing spaces:
 
 ```bash
 uv run antenna-extract init-run "path/to/paper.pdf"
-uv run antenna-extract render-pages "runs/run_<id>"
+uv run antenna-extract render-pages "runs/run_<id>" --dpi 300
 uv run antenna-extract convert-document "runs/run_<id>"
-uv run antenna-extract extract-figures "runs/run_<id>"
-uv run antenna-extract extract-architecture "runs/run_<id>"
+uv run antenna-extract extract-figures "runs/run_<id>" --scale 4.0 --margin-pt 2.0
+uv run antenna-extract extract-architecture "runs/run_<id>" --max-assets 6
 ```
 
-Runs use `runs/` by default; `init-run --runs-root PATH` selects another parent.
+Supply an existing local PDF in place of `path/to/paper.pdf`. Each command
+requires the preceding stage to succeed. Use a new run for another attempt;
+existing outputs are protected. Runs use `runs/` by default;
+`init-run --runs-root PATH` selects another parent.
 Rendering accepts `--dpi`; figure extraction accepts `--scale` and `--margin-pt`.
 Architecture accepts `--max-assets`, defaulting to six assets in one request.
 See the [overview](docs/overview.md#processing-stages) for current rendering
-defaults and stage prerequisites.
+defaults and stage prerequisites, and [setup details](docs/overview.md#execution-prerequisites)
+for service requirements. These instructions have been checked against code;
+installation and live execution have not been repeated for this documentation.
 
 ## Current outputs
 
@@ -111,6 +123,12 @@ complete. Failed runs may contain partial diagnostics.
 
 `architecture_execution.json` is an execution artefact, not the planned final
 architecture schema. Neither final consumer JSON file is generated today.
+
+The [baseline report excerpt](docs/examples/architecture-report.md) shows a real
+helix-antenna execution, including unresolved geometry and feeding details.
+Its [trace summary](docs/examples/trace-summary.md) records the models, visual
+request and provenance limits. It is historical execution evidence, not an
+independently validated scientific result or a promise of identical output.
 
 ## Limitations and further documentation
 
