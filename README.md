@@ -47,20 +47,29 @@ checks are diagnostic; a non-empty report can be published with structural error
 
 ## Setup and usage
 
-Use Python 3.12 and [`uv`](https://docs.astral.sh/uv/) for this client:
+Use Git, Python 3.12 and [`uv`](https://docs.astral.sh/uv/) for this client:
 
 ```bash
+git clone https://github.com/GoncaGomes/antenna-paper-extraction.git
+cd antenna-paper-extraction
+git switch exp/architecture-mcp
 uv sync
 uv run antenna-extract --help
 ```
 
-Install `mcp-pdf-ingestion` separately in its own repository and environment.
-The client needs its existing executable and working directory, plus access to
-an OpenAI-compatible endpoint with deployed principal and visual models.
-It does not install or synchronize the server's dependencies.
+Install `mcp-pdf-ingestion` in its own repository and environment using its
+[installation documentation](https://github.com/GoncaGomes/mcp-pdf-ingestion/blob/145808d6cf3f308c5b3b46d767d036a253df9a4e/README.md#installation-and-launch).
+The [setup details](docs/overview.md#execution-prerequisites) identify the inspected
+server revision and executable paths. You need credentials and network access to
+an OpenAI-compatible Chat Completions service: the principal model must support
+tool calls, and the visual model must accept images. The client starts the server
+itself; it does not install or synchronize its dependencies.
 
-All eight settings below are required by `extract-architecture-mcp`. Put them
-in the process environment or a local `.env` in the current working directory:
+Copy [.env.example](.env.example) to `.env` with `cp .env.example .env`
+(PowerShell: `Copy-Item .env.example .env`) and replace the placeholders.
+Run from the repository root. All eight settings below are required by
+`extract-architecture-mcp`; the two document-conversion settings in the example
+file are only for the optional retained baseline.
 
 | Variable | Purpose |
 | --- | --- |
@@ -85,6 +94,9 @@ uv run antenna-extract init-run "path/to/paper.pdf"
 uv run antenna-extract extract-architecture-mcp "runs/run_<id>" --max-turns 80
 ```
 
+Supply an existing local PDF in place of `path/to/paper.pdf`. After `init-run`
+succeeds, run the MCP command directly; no baseline preprocessing is required.
+Use a new run for another attempt because existing architecture output is protected.
 Runs use `runs/` by default; `init-run --runs-root PATH` selects another parent.
 `--max-turns` must be positive and defaults to 80. It bounds agent iterations,
 not the total runtime. Quote paths containing spaces. The
@@ -111,6 +123,12 @@ Execution JSON records operations and diagnostics; it is not a final antenna
 schema. Neither `antenna_architecture.json` nor `antenna_results.json` is generated.
 See the [overview](docs/overview.md#execution-artefacts-and-accounting) for version
 boundaries and interpretation of call counts.
+
+The [experimental MCP report excerpt](docs/examples/architecture-report.md)
+shows a real printed-monopole execution, including its completion assumptions
+and evidence limitations. The [trace summary](docs/examples/trace-summary.md)
+records the text reads, two page inspections and provenance gaps. This is a
+historical execution, not independent scientific validation or an exact replay.
 
 ## Limitations and further documentation
 
